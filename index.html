@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>Sistema Censo - Junta Municipal San Luis</title>
+    
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    
+    <!-- Librerías para PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- LOGIN SCREEN -->
+    <div id="loginScreen" class="login-container">
+        <div class="login-card">
+            <div class="login-header">
+                <div class="logo-container">
+                    <img src="Logo-Junta-San-Luis.png" alt="Logo Junta Municipal San Luis" class="logo-login" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23ffffff%22/%3E%3Ccircle cx=%22100%22 cy=%22100%22 r=%2285%22 fill=%22%23B8860B%22/%3E%3Ccircle cx=%22100%22 cy=%22100%22 r=%2275%22 fill=%22%23D4AF37%22/%3E%3Ctext x=%22100%22 y=%22115%22 font-size=%2245%22 text-anchor=%22middle%22 fill=%22%23ffffff%22 font-weight=%22bold%22 font-family=%22serif%22%3EJMSL%3C/text%3E%3C/svg%3E'">
+                </div>
+                <h1>Junta Municipal</h1>
+                <h2>San Luis</h2>
+                <p>Departamento de Asuntos Comunitarios</p>
+                <p class="subtitle">Sistema de Censo Electoral</p>
+            </div>
+            <form id="loginForm">
+                <div class="form-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="loginUser" placeholder="Usuario" required>
+                </div>
+                <div class="form-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="loginPass" placeholder="Contraseña" required>
+                </div>
+                <button type="submit" class="btn-primary">
+                    <i class="fas fa-sign-in-alt"></i> Ingresar
+                </button>
+                <div id="loginError" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MAIN APP -->
+    <div id="mainApp" style="display:none;">
+        <!-- NAVBAR -->
+        <nav class="navbar">
+            <div class="nav-container">
+                <div class="nav-brand">
+                    <img src="Logo-Junta-San-Luis.png" alt="Logo" class="nav-logo" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23ffffff%22/%3E%3Ccircle cx=%22100%22 cy=%22100%22 r=%2285%22 fill=%22%23B8860B%22/%3E%3Ccircle cx=%22100%22 cy=%22100%22 r=%2275%22 fill=%22%23D4AF37%22/%3E%3Ctext x=%22100%22 y=%22115%22 font-size=%2245%22 text-anchor=%22middle%22 fill=%22%23ffffff%22 font-weight=%22bold%22 font-family=%22serif%22%3EJMSL%3C/text%3E%3C/svg%3E'">
+                    <span class="nav-title">Censo Electoral</span>
+                </div>
+                <button class="nav-toggle" id="navToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <ul class="nav-menu" id="navMenu">
+                    <li><a href="#" onclick="showSection('dashboard')" class="active"><i class="fas fa-home"></i> <span>Inicio</span></a></li>
+                    <li id="menuAdmin" style="display:none;"><a href="#" onclick="showSection('adminPanel')"><i class="fas fa-cogs"></i> <span>Admin</span></a></li>
+                    <li><a href="#" onclick="showSection('censusForm')"><i class="fas fa-clipboard-list"></i> <span>Encuesta</span></a></li>
+                    <li><a href="#" onclick="showSection('misEncuestas')"><i class="fas fa-list"></i> <span>Mis Encuestas</span></a></li>
+                    <li id="menuReportes" style="display:none;"><a href="#" onclick="showSection('reports')"><i class="fas fa-chart-bar"></i> <span>Reportes</span></a></li>
+                    <li><a href="#" onclick="logout()"><i class="fas fa-sign-out-alt"></i> <span>Salir</span></a></li>
+                </ul>
+            </div>
+        </nav>
+
+        <!-- MAIN CONTENT -->
+        <main class="main-content">
+            <!-- DASHBOARD -->
+            <section id="dashboard" class="section active">
+                <div class="section-header">
+                    <h2><i class="fas fa-home"></i> Panel de Control</h2>
+                    <p>Bienvenido, <span id="userNameDisplay">Usuario</span></p>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-users"></i></div>
+                        <div class="stat-info">
+                            <h3 id="totalCensados">0</h3>
+                            <p>Total Censados</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-layer-group"></i></div>
+                        <div class="stat-info">
+                            <h3 id="totalBloques">0</h3>
+                            <p>Bloques Registrados</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-road"></i></div>
+                        <div class="stat-info">
+                            <h3 id="totalCalles">0</h3>
+                            <p>Calles Registradas</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-user-check"></i></div>
+                        <div class="stat-info">
+                            <h3 id="totalEncuestadores">0</h3>
+                            <p>Encuestadores</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="quick-actions">
+                    <h3>Acciones Rápidas</h3>
+                    <div class="action-buttons">
+                        <button onclick="showSection('censusForm')" class="btn-action"><i class="fas fa-plus-circle"></i> Nueva Encuesta</button>
+                        <button id="btnAdmin" style="display:none;" onclick="showSection('adminPanel')" class="btn-action"><i class="fas fa-edit"></i> Administrar</button>
+                        <button onclick="showSection('misEncuestas')" class="btn-action"><i class="fas fa-list"></i> Mis Encuestas</button>
+                        <button id="btnReportes" style="display:none;" onclick="showSection('reports')" class="btn-action"><i class="fas fa-file-alt"></i> Ver Reportes</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ADMIN PANEL -->
+            <section id="adminPanel" class="section">
+                <div class="section-header">
+                    <h2><i class="fas fa-cogs"></i> Panel de Administración</h2>
+                    <p>Gestiona bloques, sectores, calles, usuarios y presidentes de comité</p>
+                </div>
+
+                <div class="admin-tabs">
+                    <button class="tab-btn active" data-tab="tabBloques">Bloques y Sectores</button>
+                    <button class="tab-btn" data-tab="tabCalles">Calles</button>
+                    <button class="tab-btn" data-tab="tabUsuarios">Usuarios</button>
+                    <button class="tab-btn" data-tab="tabPresidentes">Presidentes de Comité</button>
+                    <button class="tab-btn" data-tab="tabEncuestas">Todas las Encuestas</button>
+                </div>
+
+                <div id="tabBloques" class="tab-content active">
+                    <div class="admin-card">
+                        <h3><i class="fas fa-plus-circle"></i> Agregar Bloque y Sector</h3>
+                        <form id="bloqueForm">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Bloque (Romano I-X)</label>
+                                    <select id="bloqueSelect" required>
+                                        <option value="">Seleccionar</option>
+                                        <option value="I">I</option>
+                                        <option value="II">II</option>
+                                        <option value="III">III</option>
+                                        <option value="IV">IV</option>
+                                        <option value="V">V</option>
+                                        <option value="VI">VI</option>
+                                        <option value="VII">VII</option>
+                                        <option value="VIII">VIII</option>
+                                        <option value="IX">IX</option>
+                                        <option value="X">X</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Nombre del Sector</label>
+                                    <input type="text" id="sectorNombre" placeholder="Ej: Las Flores" required>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn-primary"><i class="fas fa-save"></i> Guardar Bloque/Sector</button>
+                        </form>
+                    </div>
+                    <div class="admin-card">
+                        <h3><i class="fas fa-list"></i> Bloques y Sectores Registrados</h3>
+                        <div id="bloqueList" class="list-container"></div>
+                    </div>
+                </div>
+
+                <div id="tabCalles" class="tab-content">
+                    <div class="admin-card">
+                        <h3><i class="fas fa-plus-circle"></i> Agregar Calle</h3>
+                        <form id="calleForm">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Bloque</label>
+                                    <select id="calleBloqueSelect" required>
+                                        <option value="">Seleccionar</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Sector</label>
+                                    <select id="calleSectorSelect" required>
+                                        <option value="">Seleccionar</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Nombre de la Calle</label>
+                                <input type="text" id="calleNombre" placeholder="Ej: Calle Principal" required>
+                            </div>
+                            <button type="submit" class="btn-primary"><i class="fas fa-save"></i> Guardar Calle</button>
+                        </form>
+                    </div>
+                    <div class="admin-card">
+                        <h3><i class="fas fa-list"></i> Calles Registradas</h3>
+                        <div id="calleList" class="list-container"></div>
+                    </div>
+                </div>
+
+                <div id="tabUsuarios" class="tab-content">
+                    <div class="admin-card">
+                        <h3><i class="fas fa-user-plus"></i> Registrar Encuestador</h3>
+                        <form id="usuarioForm">
+                            <div class="form-group">
+                                <label>Nombre del Encuestador</label>
+                                <input type="text" id="encuestadorNombre" placeholder="Nombre completo" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Usuario</label>
+                                <input type="text" id="encuestadorUser" placeholder="Usuario" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Contraseña</label>
+                                <input type="password" id="encuestadorPass" placeholder="Contraseña" required>
+                            </div>
+                            <button type="submit" class="btn-primary"><i class="fas fa-user-plus"></i> Registrar Encuestador</button>
+                        </form>
+                    </div>
+                    <div class="admin-card">
+                        <h3><i class="fas fa-users"></i> Encuestadores Registrados</h3>
+                        <div id="encuestadorList" class="list-container"></div>
+                    </div>
+                </div>
+
+                <!-- TAB: PRESIDENTES DE COMITÉ -->
+                <div id="tabPresidentes" class="tab-content">
+                    <div class="admin-card">
+                        <h3><i class="fas fa-user-tie"></i> Registrar Presidente de Comité</h3>
+                        <form id="presidenteForm">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Bloque</label>
+                                    <select id="presidenteBloque" required>
+                                        <option value="">Seleccionar</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Sector</label>
+                                    <select id="presidenteSector" required>
+                                        <option value="">Seleccionar</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Nombre del Presidente de Comité</label>
+                                <input type="text" id="presidenteNombre" placeholder="Nombre completo" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Cédula</label>
+                                <input type="text" id="presidenteCedula" placeholder="000-0000000-0">
+                            </div>
+                            <button type="submit" class="btn-primary"><i class="fas fa-user-tie"></i> Registrar Presidente</button>
+                        </form>
+                    </div>
+                    <div class="admin-card">
+                        <h3><i class="fas fa-list"></i> Presidentes de Comité Registrados</h3>
+                        <div id="presidenteList" class="list-container"></div>
+                    </div>
+                </div>
+
+                <div id="tabEncuestas" class="tab-content">
+                    <div class="admin-card">
+                        <h3><i class="fas fa-search"></i> Buscar Encuestas</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Buscar por Cédula</label>
+                                <input type="text" id="buscarCedula" placeholder="Ingrese cédula">
+                            </div>
+                            <div class="form-group">
+                                <label>Buscar por Nombre</label>
+                                <input type="text" id="buscarNombre" placeholder="Ingrese nombre">
+                            </div>
+                        </div>
+                        <button onclick="buscarEncuestas()" class="btn-primary"><i class="fas fa-search"></i> Buscar</button>
+                        <button onclick="cargarTodasEncuestas()" class="btn-action" style="margin-top:10px;"><i class="fas fa-sync"></i> Mostrar Todas</button>
+                    </div>
+                    <div class="admin-card">
+                        <h3><i class="fas fa-list"></i> Lista de Encuestas</h3>
+                        <div id="listaEncuestasAdmin" class="list-container"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CENSUS FORM -->
+            <section id="censusForm" class="section">
+                <div class="section-header">
+                    <h2><i class="fas fa-clipboard-list"></i> Formulario de Encuesta</h2>
+                    <p>Complete los datos del ciudadano</p>
+                </div>
+
+                <div class="form-card">
+                    <form id="censusFormData">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Cédula o Pasaporte *</label>
+                                <input type="text" id="cedula" placeholder="Ej: 123456789" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Nombre Completo *</label>
+                                <input type="text" id="nombreCompleto" placeholder="Nombres y apellidos" required>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Sexo *</label>
+                                <select id="sexo" required>
+                                    <option value="">Seleccionar</option>
+                                    <option value="Masculino">Masculino</option>
+                                    <option value="Femenino">Femenino</option>
+                                    <option value="Otro">Otro</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Teléfono</label>
+                                <input type="tel" id="telefono" placeholder="Ej: 809-555-1234">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Dirección *</label>
+                            <input type="text" id="direccion" placeholder="Dirección completa" required>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Bloque *</label>
+                                <select id="censoBloque" required>
+                                    <option value="">Seleccionar</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Sector *</label>
+                                <select id="censoSector" required>
+                                    <option value="">Seleccionar</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Calle *</label>
+                            <select id="censoCalle" required>
+                                <option value="">Seleccionar</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="display:none;">
+                            <label>Encuestador</label>
+                            <input type="text" id="censoEncuestador" readonly>
+                        </div>
+
+                        <button type="submit" class="btn-primary"><i class="fas fa-check-circle"></i> Guardar Encuesta</button>
+                    </form>
+                </div>
+
+                <div class="form-card">
+                    <h3><i class="fas fa-history"></i> Últimas Encuestas</h3>
+                    <div id="ultimasEncuestas" class="list-container"></div>
+                </div>
+            </section>
+
+            <!-- MIS ENCUESTAS -->
+            <section id="misEncuestas" class="section">
+                <div class="section-header">
+                    <h2><i class="fas fa-list"></i> Mis Encuestas</h2>
+                    <p>Administra tus encuestas realizadas</p>
+                </div>
+
+                <div class="admin-card">
+                    <h3><i class="fas fa-search"></i> Buscar en mis encuestas</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Buscar por Cédula</label>
+                            <input type="text" id="misBuscarCedula" placeholder="Ingrese cédula">
+                        </div>
+                        <div class="form-group">
+                            <label>Buscar por Nombre</label>
+                            <input type="text" id="misBuscarNombre" placeholder="Ingrese nombre">
+                        </div>
+                    </div>
+                    <button onclick="buscarMisEncuestas()" class="btn-primary"><i class="fas fa-search"></i> Buscar</button>
+                    <button onclick="cargarMisEncuestas()" class="btn-action" style="margin-top:10px;"><i class="fas fa-sync"></i> Mostrar Todas</button>
+                </div>
+
+                <div class="admin-card">
+                    <h3><i class="fas fa-list"></i> Mis Encuestas Realizadas</h3>
+                    <div id="listaMisEncuestas" class="list-container"></div>
+                </div>
+            </section>
+
+            <!-- REPORTS -->
+            <section id="reports" class="section">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-bar"></i> Generación de Reportes</h2>
+                    <p>Exporta datos en Excel y PDF</p>
+                </div>
+
+                <div class="report-card">
+                    <h3><i class="fas fa-file-export"></i> Generar Reporte</h3>
+                    <div class="report-options">
+                        <div class="form-group">
+                            <label>Tipo de Reporte</label>
+                            <select id="reportType">
+                                <option value="todos">Todos los Sectores</option>
+                                <option value="bloque">Por Bloque</option>
+                                <option value="sector">Por Sector</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="reportBloqueGroup" style="display:none;">
+                            <label>Bloque</label>
+                            <select id="reportBloque">
+                                <option value="">Seleccionar</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="reportSectorGroup" style="display:none;">
+                            <label>Sector</label>
+                            <select id="reportSector">
+                                <option value="">Seleccionar</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="report-columns">
+                        <h4><i class="fas fa-columns"></i> Seleccionar Columnas para el Reporte</h4>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" class="col-check" value="cedula" checked> Cédula</label>
+                            <label><input type="checkbox" class="col-check" value="nombre" checked> Nombre</label>
+                            <label><input type="checkbox" class="col-check" value="sexo" checked> Sexo</label>
+                            <label><input type="checkbox" class="col-check" value="telefono" checked> Teléfono</label>
+                            <label><input type="checkbox" class="col-check" value="direccion" checked> Dirección</label>
+                            <label><input type="checkbox" class="col-check" value="bloque" checked> Bloque</label>
+                            <label><input type="checkbox" class="col-check" value="sector" checked> Sector</label>
+                            <label><input type="checkbox" class="col-check" value="calle" checked> Calle</label>
+                            <label><input type="checkbox" class="col-check" value="encuestador" checked> Encuestador</label>
+                            <label><input type="checkbox" class="col-check" value="fecha" checked> Fecha</label>
+                            <label><input type="checkbox" class="col-check" value="registradoPor" checked> Registrado por</label>
+                        </div>
+                    </div>
+
+                    <div class="report-buttons">
+                        <button onclick="generarReporte('excel')" class="btn-success"><i class="fas fa-file-excel"></i> Exportar Excel</button>
+                        <button onclick="generarReporte('pdf')" class="btn-danger"><i class="fas fa-file-pdf"></i> Exportar PDF</button>
+                    </div>
+                    <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
+                        <button onclick="imprimirTablaFirmas()" class="btn-primary" style="background: #1a3c5e; width: auto; padding: 12px 30px;">
+                            <i class="fas fa-signature"></i> Imprimir Tabla de Firmas
+                        </button>
+                        <p style="font-size: 0.85rem; color: #6b7a8f; margin-top: 8px;">
+                            <i class="fas fa-info-circle"></i> Genera una tabla con Cédula, Nombre y espacio para firma
+                        </p>
+                    </div>
+                </div>
+
+                <div class="report-card">
+                    <h3><i class="fas fa-eye"></i> Vista Previa</h3>
+                    <div id="reportPreview" class="report-preview">
+                        <p>Seleccione las opciones y genere un reporte</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- FOOTER -->
+        <footer class="footer">
+            <div class="footer-content">
+                <p>&copy; 2024 Junta Municipal San Luis</p>
+                <p>Departamento de Asuntos Comunitarios</p>
+                <p>Director: Francisco Lorenzo de la Rosa</p>
+            </div>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
