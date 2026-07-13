@@ -737,6 +737,204 @@ body {
     flex-wrap: wrap;
 }
 
+/* ============================================
+   ===== VISTA PREVIA DE REPORTES =====
+   ============================================ */
+
+.report-preview {
+    background: var(--gray-light);
+    padding: 15px;
+    border-radius: var(--radius);
+    min-height: 120px;
+    overflow-x: auto;
+}
+
+/* ===== IMPORTANTE: Estilos específicos para la vista previa ===== */
+/* Estos estilos SOLO aplican dentro de .report-preview */
+
+.report-preview .preview-container {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.report-preview .preview-header {
+    text-align: center;
+    border-bottom: 2px solid #B8860B;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+}
+
+.report-preview .preview-header h3 {
+    color: #1a3c5e;
+    margin: 0;
+    font-size: 1rem;
+    letter-spacing: 1px;
+}
+
+.report-preview .preview-header .rnc {
+    font-size: 0.7rem;
+    color: #6b7a8f;
+}
+
+.report-preview .preview-header .ubicacion {
+    font-size: 0.7rem;
+    color: #6b7a8f;
+}
+
+.report-preview .preview-header .depto {
+    font-size: 0.8rem;
+    color: #6b7a8f;
+}
+
+.report-preview .preview-header .preview-title {
+    color: #B8860B;
+    font-weight: bold;
+    font-size: 0.9rem;
+}
+
+.report-preview .preview-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 0.75rem;
+    color: #2c3e50;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.report-preview .preview-info span {
+    background: #f5f7fa;
+    padding: 2px 10px;
+    border-radius: 4px;
+}
+
+.report-preview .preview-info strong {
+    color: #1a3c5e;
+}
+
+/* ===== TABLA DE LA VISTA PREVIA ===== */
+.report-preview .preview-table-wrapper {
+    overflow-x: auto;
+    max-height: 350px;
+    overflow-y: auto;
+    border-radius: 6px;
+    border: 1px solid #e0e0e0;
+}
+
+.report-preview .preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.7rem;
+    min-width: 500px;
+}
+
+.report-preview .preview-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.report-preview .preview-table thead th {
+    background: #1a3c5e;
+    color: white;
+    padding: 6px 8px;
+    border: 1px solid #1a3c5e;
+    text-align: left;
+    white-space: nowrap;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+.report-preview .preview-table thead th.centered {
+    text-align: center;
+}
+
+.report-preview .preview-table tbody tr {
+    border-bottom: 1px solid #f0f0f0;
+    transition: background 0.2s;
+}
+
+.report-preview .preview-table tbody tr:hover {
+    background: #FFF8DC;
+}
+
+.report-preview .preview-table tbody tr:nth-child(even) {
+    background: #fafafa;
+}
+
+.report-preview .preview-table tbody tr:nth-child(even):hover {
+    background: #FFF8DC;
+}
+
+.report-preview .preview-table tbody td {
+    padding: 4px 6px;
+    border: 1px solid #e0e0e0;
+    max-width: 120px;
+    word-wrap: break-word;
+    vertical-align: middle;
+    color: #2c3e50;
+    font-size: 0.6rem;
+}
+
+.report-preview .preview-table tbody td.numero {
+    text-align: center;
+    font-weight: 600;
+    color: #1a3c5e;
+    background: #f5f7fa;
+}
+
+/* ===== PIE DE LA VISTA PREVIA ===== */
+.report-preview .preview-footer {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 2px solid #B8860B;
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: #2c3e50;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.report-preview .preview-footer .firma-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.report-preview .preview-footer .firma-info strong {
+    color: #1a3c5e;
+}
+
+.report-preview .preview-footer .firma-line {
+    border-top: 1px solid #333;
+    width: 100px;
+    margin: 3px 0;
+}
+
+.report-preview .preview-footer .firma-cargo {
+    font-size: 0.6rem;
+    color: #6b7a8f;
+}
+
+/* ===== MENSAJE VACÍO ===== */
+.report-preview .preview-empty {
+    text-align: center;
+    color: #6b7a8f;
+    padding: 30px 20px;
+    font-size: 0.95rem;
+}
+
+.report-preview .preview-empty i {
+    font-size: 2rem;
+    color: #c5cdd8;
+    display: block;
+    margin-bottom: 10px;
+}
+
 /* ===== REPORTS ===== */
 .report-options {
     display: grid;
@@ -751,39 +949,9 @@ body {
     flex-wrap: wrap;
 }
 
-.report-preview {
-    background: var(--gray-light);
-    padding: 20px;
-    border-radius: 8px;
-    min-height: 120px;
-    font-size: 0.95rem;
-    overflow-x: auto;
-}
-
-.report-preview table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.85rem;
-}
-
-.report-preview table th,
-.report-preview table td {
-    padding: 8px 12px;
-    border: 1px solid var(--gray);
-    text-align: left;
-}
-
-.report-preview table th {
-    background: var(--secondary);
-    color: white;
-    font-weight: 600;
-}
-
-.report-preview table tr:nth-child(even) {
-    background: var(--gold-light);
-}
-
-/* ===== FOOTER ===== */
+/* ============================================
+   ===== FOOTER =====
+   ============================================ */
 .footer {
     background: linear-gradient(135deg, var(--secondary), var(--secondary-light));
     color: white;
@@ -804,7 +972,10 @@ body {
     font-weight: 500;
 }
 
-/* ===== RESPONSIVE ===== */
+/* ============================================
+   ===== RESPONSIVE =====
+   ============================================ */
+
 @media (max-width: 992px) {
     .form-row {
         grid-template-columns: 1fr;
@@ -852,6 +1023,29 @@ body {
     
     .section-header h2 {
         font-size: 1.3rem;
+    }
+    
+    .report-preview .preview-info {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+    
+    .report-preview .preview-table {
+        font-size: 0.6rem;
+        min-width: 400px;
+    }
+    
+    .report-preview .preview-table thead th,
+    .report-preview .preview-table tbody td {
+        padding: 3px 4px;
+        font-size: 0.55rem;
+    }
+    
+    .report-preview .preview-footer {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
     }
 }
 
@@ -902,5 +1096,20 @@ body {
     .checkbox-group label {
         font-size: 0.8rem;
         padding: 4px 10px;
+    }
+    
+    .report-preview .preview-table-wrapper {
+        max-height: 250px;
+    }
+    
+    .report-preview .preview-table {
+        font-size: 0.5rem;
+        min-width: 350px;
+    }
+    
+    .report-preview .preview-table thead th,
+    .report-preview .preview-table tbody td {
+        padding: 2px 3px;
+        font-size: 0.5rem;
     }
 }
