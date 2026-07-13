@@ -1831,14 +1831,17 @@ function exportarExcel(datos, titulo, columnas) {
 }
 
 // ============================================
-// ===== EXPORTAR PDF =====
+// ===== EXPORTAR PDF - TAMAÑO CARTA HORIZONTAL =====
 // ============================================
 
 function exportarPDF(datos, titulo, columnas) {
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF('landscape', 'mm', 'a4');
-    const pageWidth = 297;
-    const pageHeight = 210;
+    
+    // ===== TAMAÑO CARTA (8.5 x 11 pulgadas) HORIZONTAL =====
+    const doc = new jsPDF('landscape', 'mm', [279.4, 215.9]); // Ancho x Alto en mm
+    
+    const pageWidth = 279.4;  // Ancho de carta horizontal
+    const pageHeight = 215.9; // Alto de carta horizontal
     const margin = 10;
     let pageCount = 1;
     
@@ -1856,140 +1859,259 @@ function exportarPDF(datos, titulo, columnas) {
         registradoPor: 'REGISTRADO POR'
     };
     
+    // ===== SOLO LAS COLUMNAS SELECCIONADAS =====
     const headers = ['No.', ...columnas.map(col => headersMap[col] || col.toUpperCase())];
-    const colWidth = Math.floor((pageWidth - margin * 2) / headers.length);
     
-    function dibujarEncabezado(doc, pageWidth, margin) {
+    // ===== DEFINIR ANCHOS DE COLUMNAS =====
+    const colWidths = {
+        no: 12,
+        cedula: 28,
+        nombre: 38,
+        sexo: 20,
+        telefono: 24,
+        direccion: 42,
+        bloque: 16,
+        sector: 28,
+        calle: 30,
+        encuestador: 32,
+        fecha: 28,
+        registradoPor: 28
+    };
+    
+    // ===== CALCULAR ANCHOS =====
+    const colWidthsArray = [];
+    headers.forEach((h, i) => {
+        if (i === 0) {
+            colWidthsArray.push(colWidths.no);
+        } else {
+            const colKey = columnas[i - 1];
+            colWidthsArray.push(colWidths[colKey] || 25);
+        }
+    });
+    
+    let totalTableWidth = colWidthsArray.reduce((a, b) => a + b, 0);
+    const availableWidth = pageWidth - margin * 2;
+    
+    let finalColWidths = [...colWidthsArray];
+    if (totalTableWidth > availableWidth) {
+        const factor = availableWidth / totalTableWidth;
+        finalColWidths = colWidthsArray.map(w => Math.floor(w * factor));
+    }
+    
+    // ===== DIBUJAR ENCABEZADO DEL DOCUMENTO =====
+    function dibujarEncabezado(doc) {
         try {
             const logoImg = document.querySelector('.nav-logo')?.src || '';
             if (logoImg) {
-                const logoWidth = 25;
-                const logoHeight = 25;
+                const logoWidth = 20;
+                const logoHeight = 20;
                 const xLogo = (pageWidth - logoWidth) / 2;
-                doc.addImage(logoImg, 'PNG', xLogo, 3, logoWidth, logoHeight);
+                doc.addImage(logoImg, 'PNG', xLogo, 2, logoWidth, logoHeight);
             }
         } catch(e) {}
         
-        doc.setFontSize(14);
-        doc.setFont('helvetica', 'bold');
-        doc.text('JUNTA MUNICIPAL SAN LUIS', pageWidth/2, 32, { align: 'center' });
-        doc.setFontSize(10);
-        doc.text('RNC: 4-30-017809', pageWidth/2, 37, { align: 'center' });
-        doc.text('MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO', pageWidth/2, 42, { align: 'center' });
-        doc.text('DEPARTAMENTO DE ASUNTOS COMUNITARIOS', pageWidth/2, 47, { align: 'center' });
-        
         doc.setFontSize(12);
-        doc.text('REPORTE DE CENSO ELECTORAL', pageWidth/2, 54, { align: 'center' });
+        doc.setFont('helvetica', 'bold');
+        doc.text('JUNTA MUNICIPAL SAN LUIS', pageWidth/2, 25, { align: 'center' });
         
         doc.setFontSize(8);
+        doc.text('RNC: 4-30-017809', pageWidth/2, 30, { align: 'center' });
+        doc.text('MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO', pageWidth/2, 34, { align: 'center' });
+        doc.text('DEPARTAMENTO DE ASUNTOS COMUNITARIOS', pageWidth/2, 38, { align: 'center' });
+        
+        doc.setFontSize(10);
+        doc.text('REPORTE DE CENSO ELECTORAL', pageWidth/2, 44, { align: 'center' });
+        
+        doc.setFontSize(7);
         doc.setFont('helvetica', 'normal');
-        doc.text(`REPORTE: ${titulo.toUpperCase()}`, pageWidth/2, 61, { align: 'center' });
-        doc.text(`FECHA: ${new Date().toLocaleDateString()}`, pageWidth/2, 66, { align: 'center' });
-        doc.text(`TOTAL DE REGISTROS: ${datos.length}`, pageWidth/2, 71, { align: 'center' });
+        doc.text(`REPORTE: ${titulo.toUpperCase()}`, pageWidth/2, 50, { align: 'center' });
+        doc.text(`FECHA: ${new Date().toLocaleDateString()}`, pageWidth/2, 54, { align: 'center' });
+        doc.text(`TOTAL DE REGISTROS: ${datos.length}`, pageWidth/2, 58, { align: 'center' });
+        
+        return 64;
     }
     
-    function dibujarPiePagina(doc, pageWidth, pageHeight, pageNum) {
-        const y = pageHeight - 8;
-        doc.setFontSize(7);
+    // ===== DIBUJAR TABLA CON BORDES =====
+    function dibujarTabla(doc, startY, datosSlice) {
+        let currentY = startY;
+        const rowHeight = 5;
+        const headerHeight = 7;
+        const tableWidth = finalColWidths.reduce((a, b) => a + b, 0);
+        
+        // --- ENCABEZADO DE TABLA ---
+        doc.setFontSize(6.5);
+        doc.setFont('helvetica', 'bold');
+        
+        doc.setFillColor(26, 60, 94);
+        doc.rect(margin, currentY, tableWidth, headerHeight, 'F');
+        
+        doc.setTextColor(255, 255, 255);
+        let xPos = margin;
+        headers.forEach((h, i) => {
+            doc.text(h, xPos + 1.5, currentY + 3.5);
+            xPos += finalColWidths[i];
+        });
+        doc.setTextColor(0, 0, 0);
+        
+        doc.setDrawColor(26, 60, 94);
+        xPos = margin;
+        headers.forEach((h, i) => {
+            doc.rect(xPos, currentY, finalColWidths[i], headerHeight);
+            xPos += finalColWidths[i];
+        });
+        
+        currentY += headerHeight;
+        
+        // --- DATOS DE LA TABLA ---
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        
+        datosSlice.forEach((d, idx) => {
+            const globalIdx = datos.indexOf(d);
+            const isEven = idx % 2 === 0;
+            
+            const row = [String(globalIdx + 1)];
+            columnas.forEach(col => {
+                let valor = d[col] || '';
+                if (col === 'fecha') {
+                    valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
+                } else if (col !== 'cedula' && col !== 'telefono') {
+                    valor = valor.toUpperCase();
+                }
+                row.push(valor);
+            });
+            
+            let maxLines = 1;
+            let rowData = [];
+            row.forEach((text, i) => {
+                const maxWidth = finalColWidths[i] - 3;
+                const lines = doc.splitTextToSize(text, maxWidth);
+                rowData.push(lines);
+                if (lines.length > maxLines) maxLines = lines.length;
+            });
+            
+            const rowHeightDynamic = Math.max(rowHeight, maxLines * 4.5 + 1.5);
+            
+            if (isEven) {
+                doc.setFillColor(248, 248, 248);
+            } else {
+                doc.setFillColor(255, 255, 255);
+            }
+            doc.rect(margin, currentY, tableWidth, rowHeightDynamic, 'F');
+            
+            for (let line = 0; line < maxLines; line++) {
+                rowData.forEach((lines, i) => {
+                    const x = margin + finalColWidths.slice(0, i).reduce((a, b) => a + b, 0);
+                    const y = currentY + 2 + (line * 4.5);
+                    const text = lines[line] || '';
+                    doc.text(text, x + 1.5, y);
+                });
+            }
+            
+            doc.setDrawColor(200, 200, 200);
+            xPos = margin;
+            headers.forEach((h, i) => {
+                doc.rect(xPos, currentY, finalColWidths[i], rowHeightDynamic);
+                xPos += finalColWidths[i];
+            });
+            
+            currentY += rowHeightDynamic;
+        });
+        
+        return currentY;
+    }
+    
+    // ===== DIBUJAR PIE DE PÁGINA =====
+    function dibujarPiePagina(doc, pageNum) {
+        const y = pageHeight - 5;
+        doc.setFontSize(6.5);
         doc.setFont('helvetica', 'normal');
         doc.text(`Página ${pageNum}`, pageWidth/2, y, { align: 'center' });
     }
     
-    dibujarEncabezado(doc, pageWidth, margin);
-    let startY = 80;
+    // ===== GENERAR PDF CON CONTROL DE PÁGINAS =====
+    let startY = dibujarEncabezado(doc);
+    let currentIndex = 0;
+    const totalRows = datos.length;
+    const pageHeightAvailable = pageHeight - 15;
     
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    
-    headers.forEach((h, i) => {
-        const x = margin + i * colWidth;
-        doc.text(h, x + 1, startY + 3);
-        doc.setLineWidth(0.3);
-        doc.line(margin + i * colWidth, startY + 5, margin + (i + 1) * colWidth, startY + 5);
-    });
-    
-    startY += 7;
-    doc.setFont('helvetica', 'normal');
-    let rowCount = 0;
-    const maxRowsPerPage = 10;
-    
-    datos.forEach((d, idx) => {
-        const row = [String(idx + 1)];
-        columnas.forEach(col => {
-            let valor = d[col] || '';
-            if (col === 'fecha') {
-                valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
-            } else if (col !== 'cedula' && col !== 'telefono') {
-                valor = valor.toUpperCase();
+    while (currentIndex < totalRows) {
+        // Calcular cuántas filas caben en esta página
+        let tempY = startY;
+        let rowCount = 0;
+        let tempSlice = [];
+        let headerAdded = false;
+        
+        for (let i = currentIndex; i < totalRows; i++) {
+            const d = datos[i];
+            
+            // Calcular altura de esta fila
+            const row = [String(i + 1)];
+            columnas.forEach(col => {
+                let valor = d[col] || '';
+                if (col === 'fecha') {
+                    valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
+                } else if (col !== 'cedula' && col !== 'telefono') {
+                    valor = valor.toUpperCase();
+                }
+                row.push(valor);
+            });
+            
+            let maxLines = 1;
+            row.forEach((text, j) => {
+                const maxWidth = finalColWidths[j] - 3;
+                const lines = doc.splitTextToSize(text, maxWidth);
+                if (lines.length > maxLines) maxLines = lines.length;
+            });
+            
+            const rowHeightDynamic = Math.max(5, maxLines * 4.5 + 1.5);
+            
+            // Verificar si cabe
+            if (!headerAdded) {
+                // Primera fila: incluir espacio del encabezado
+                if (tempY + 7 + rowHeightDynamic + 2 > pageHeightAvailable) {
+                    break;
+                }
+                tempY += 7; // Espacio del encabezado
+                headerAdded = true;
+            } else {
+                if (tempY + rowHeightDynamic + 2 > pageHeightAvailable) {
+                    break;
+                }
             }
-            row.push(valor);
-        });
+            
+            tempY += rowHeightDynamic + 1;
+            rowCount++;
+            tempSlice.push(d);
+        }
         
-        let maxLines = 1;
-        let rowData = [];
-        row.forEach((text, i) => {
-            const maxWidth = colWidth - 2;
-            const lines = doc.splitTextToSize(text, maxWidth);
-            rowData.push(lines);
-            if (lines.length > maxLines) maxLines = lines.length;
-        });
+        // Si no cabe ninguna fila, forzar al menos una
+        if (tempSlice.length === 0 && currentIndex < totalRows) {
+            tempSlice.push(datos[currentIndex]);
+            rowCount = 1;
+            // Reiniciar Y
+            tempY = startY + 7;
+        }
         
-        if (rowCount >= maxRowsPerPage && idx < datos.length - 1) {
-            dibujarPiePagina(doc, pageWidth, pageHeight, pageCount);
+        // Dibujar la tabla
+        startY = dibujarTabla(doc, startY, tempSlice);
+        currentIndex += tempSlice.length;
+        
+        // Si hay más datos, nueva página
+        if (currentIndex < totalRows) {
+            dibujarPiePagina(doc, pageCount);
             doc.addPage();
             pageCount++;
-            startY = margin + 15;
-            rowCount = 0;
-            
-            doc.setFontSize(12);
-            doc.setFont('helvetica', 'bold');
-            doc.text('JUNTA MUNICIPAL SAN LUIS', pageWidth/2, 18, { align: 'center' });
-            doc.setFontSize(9);
-            doc.text('RNC: 4-30-017809', pageWidth/2, 23, { align: 'center' });
-            doc.text('MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO', pageWidth/2, 28, { align: 'center' });
-            doc.text('DEPARTAMENTO DE ASUNTOS COMUNITARIOS', pageWidth/2, 33, { align: 'center' });
-            doc.setFontSize(10);
-            doc.text('REPORTE DE CENSO ELECTORAL', pageWidth/2, 40, { align: 'center' });
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'normal');
-            doc.text(`REPORTE: ${titulo.toUpperCase()}`, pageWidth/2, 46, { align: 'center' });
-            doc.text(`FECHA: ${new Date().toLocaleDateString()}`, pageWidth/2, 51, { align: 'center' });
-            doc.text(`TOTAL DE REGISTROS: ${datos.length}`, pageWidth/2, 56, { align: 'center' });
-            
-            startY = 65;
-            doc.setFontSize(7);
-            doc.setFont('helvetica', 'bold');
-            headers.forEach((h, i) => {
-                const x = margin + i * colWidth;
-                doc.text(h, x + 1, startY + 3);
-                doc.setLineWidth(0.3);
-                doc.line(margin + i * colWidth, startY + 5, margin + (i + 1) * colWidth, startY + 5);
-            });
-            startY += 7;
-            doc.setFont('helvetica', 'normal');
+            startY = dibujarEncabezado(doc);
         }
-        
-        const cellHeight = 5 * maxLines + 2;
-        for (let line = 0; line < maxLines; line++) {
-            rowData.forEach((lines, i) => {
-                const x = margin + i * colWidth;
-                const y = startY + rowCount * 5 + line * 5;
-                const text = lines[line] || '';
-                doc.text(text, x + 1, y + 3);
-            });
-        }
-        
-        const yLine = startY + rowCount * 5 + cellHeight - 1;
-        doc.setLineWidth(0.1);
-        doc.line(margin, yLine, pageWidth - margin, yLine);
-        rowCount += maxLines;
-    });
+    }
     
-    dibujarPiePagina(doc, pageWidth, pageHeight, pageCount);
+    // Último pie de página
+    dibujarPiePagina(doc, pageCount);
+    
     doc.save(`Censo_JMSL_${titulo.replace(/\s/g, '_')}_${new Date().toISOString().slice(0,10)}.pdf`);
     showNotification('✅ Reporte PDF generado correctamente', 'success');
 }
-
 // ============================================
 // ===== TABLA DE FIRMAS - CORREGIDA CON PRESIDENTE =====
 // ============================================
