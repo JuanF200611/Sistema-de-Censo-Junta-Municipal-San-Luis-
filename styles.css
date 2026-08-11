@@ -41,9 +41,6 @@ body {
     min-height: 100vh;
     background: linear-gradient(135deg, var(--secondary), var(--primary-dark));
     padding: 20px;
-    background-image: 
-        radial-gradient(circle at 20% 50%, rgba(255,215,0,0.1) 0%, transparent 50%),
-        radial-gradient(circle at 80% 50%, rgba(255,215,0,0.1) 0%, transparent 50%);
 }
 
 .login-card {
@@ -314,6 +311,42 @@ body {
     font-size: 0.95rem;
 }
 
+/* ===== FILTROS DASHBOARD ===== */
+.filtros-container {
+    margin-bottom: 25px;
+}
+
+.filtros-card {
+    background: var(--white);
+    padding: 20px 25px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border-left: 4px solid var(--primary);
+}
+
+.filtros-card h3 {
+    margin-bottom: 15px;
+    color: var(--secondary);
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.filtros-card h3 i {
+    margin-right: 10px;
+    color: var(--primary);
+}
+
+.filtros-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr auto;
+    gap: 15px;
+    align-items: flex-end;
+}
+
+.filtros-row .form-group {
+    margin-bottom: 0;
+}
+
 /* ===== STATS ===== */
 .stats-grid {
     display: grid;
@@ -377,6 +410,11 @@ body {
     margin-bottom: 18px;
     color: var(--secondary);
     font-size: 1.1rem;
+}
+
+.quick-actions h3 i {
+    margin-right: 10px;
+    color: var(--primary);
 }
 
 .action-buttons {
@@ -637,64 +675,6 @@ body {
     transform: scale(1.05);
 }
 
-/* ===== LOADING SPINNER ===== */
-.loading-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.5);
-    display: none;
-    justify-content: center;
-    align-items: center;
-    z-index: 9999;
-    backdrop-filter: blur(4px);
-}
-
-.loading-overlay.active {
-    display: flex;
-}
-
-.loading-content {
-    background: white;
-    padding: 40px 50px;
-    border-radius: var(--radius);
-    text-align: center;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.02); }
-}
-
-.spinner {
-    width: 60px;
-    height: 60px;
-    margin: 0 auto 20px;
-    border: 5px solid var(--gray-light);
-    border-top: 5px solid var(--primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.loading-content h3 {
-    color: var(--secondary);
-    margin-bottom: 8px;
-}
-
-.loading-content p {
-    color: var(--gray-dark);
-    font-size: 0.9rem;
-}
-
 /* ===== LISTS ===== */
 .list-container {
     max-height: 400px;
@@ -737,10 +717,7 @@ body {
     flex-wrap: wrap;
 }
 
-/* ============================================
-   ===== VISTA PREVIA DE REPORTES =====
-   ============================================ */
-
+/* ===== REPORT PREVIEW ===== */
 .report-preview {
     background: var(--gray-light);
     padding: 15px;
@@ -748,9 +725,6 @@ body {
     min-height: 120px;
     overflow-x: auto;
 }
-
-/* ===== IMPORTANTE: Estilos específicos para la vista previa ===== */
-/* Estos estilos SOLO aplican dentro de .report-preview */
 
 .report-preview .preview-container {
     background: white;
@@ -771,21 +745,6 @@ body {
     margin: 0;
     font-size: 1rem;
     letter-spacing: 1px;
-}
-
-.report-preview .preview-header .rnc {
-    font-size: 0.7rem;
-    color: #6b7a8f;
-}
-
-.report-preview .preview-header .ubicacion {
-    font-size: 0.7rem;
-    color: #6b7a8f;
-}
-
-.report-preview .preview-header .depto {
-    font-size: 0.8rem;
-    color: #6b7a8f;
 }
 
 .report-preview .preview-header .preview-title {
@@ -810,11 +769,6 @@ body {
     border-radius: 4px;
 }
 
-.report-preview .preview-info strong {
-    color: #1a3c5e;
-}
-
-/* ===== TABLA DE LA VISTA PREVIA ===== */
 .report-preview .preview-table-wrapper {
     overflow-x: auto;
     max-height: 350px;
@@ -845,28 +799,6 @@ body {
     white-space: nowrap;
     font-size: 0.6rem;
     font-weight: 600;
-    letter-spacing: 0.3px;
-}
-
-.report-preview .preview-table thead th.centered {
-    text-align: center;
-}
-
-.report-preview .preview-table tbody tr {
-    border-bottom: 1px solid #f0f0f0;
-    transition: background 0.2s;
-}
-
-.report-preview .preview-table tbody tr:hover {
-    background: #FFF8DC;
-}
-
-.report-preview .preview-table tbody tr:nth-child(even) {
-    background: #fafafa;
-}
-
-.report-preview .preview-table tbody tr:nth-child(even):hover {
-    background: #FFF8DC;
 }
 
 .report-preview .preview-table tbody td {
@@ -886,53 +818,11 @@ body {
     background: #f5f7fa;
 }
 
-/* ===== PIE DE LA VISTA PREVIA ===== */
-.report-preview .preview-footer {
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 2px solid #B8860B;
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.75rem;
-    color: #2c3e50;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.report-preview .preview-footer .firma-info {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.report-preview .preview-footer .firma-info strong {
-    color: #1a3c5e;
-}
-
-.report-preview .preview-footer .firma-line {
-    border-top: 1px solid #333;
-    width: 100px;
-    margin: 3px 0;
-}
-
-.report-preview .preview-footer .firma-cargo {
-    font-size: 0.6rem;
-    color: #6b7a8f;
-}
-
-/* ===== MENSAJE VACÍO ===== */
 .report-preview .preview-empty {
     text-align: center;
     color: #6b7a8f;
     padding: 30px 20px;
     font-size: 0.95rem;
-}
-
-.report-preview .preview-empty i {
-    font-size: 2rem;
-    color: #c5cdd8;
-    display: block;
-    margin-bottom: 10px;
 }
 
 /* ===== REPORTS ===== */
@@ -949,9 +839,7 @@ body {
     flex-wrap: wrap;
 }
 
-/* ============================================
-   ===== FOOTER =====
-   ============================================ */
+/* ===== FOOTER ===== */
 .footer {
     background: linear-gradient(135deg, var(--secondary), var(--secondary-light));
     color: white;
@@ -972,17 +860,16 @@ body {
     font-weight: 500;
 }
 
-/* ============================================
-   ===== RESPONSIVE =====
-   ============================================ */
-
+/* ===== RESPONSIVE ===== */
 @media (max-width: 992px) {
     .form-row {
         grid-template-columns: 1fr;
     }
-    
     .report-options {
         grid-template-columns: 1fr;
+    }
+    .filtros-row {
+        grid-template-columns: 1fr 1fr;
     }
 }
 
@@ -990,7 +877,6 @@ body {
     .nav-toggle {
         display: block;
     }
-    
     .nav-menu {
         display: none;
         width: 100%;
@@ -998,118 +884,94 @@ body {
         padding: 10px 0;
         background: var(--secondary);
     }
-    
     .nav-menu.open {
         display: flex;
     }
-    
     .nav-menu li a {
         padding: 12px 18px;
         width: 100%;
         border-radius: 0;
     }
-    
-    .nav-menu li a:hover {
-        background: rgba(255,215,0,0.1);
-    }
-    
     .stats-grid {
         grid-template-columns: 1fr 1fr;
     }
-    
     .login-card {
         padding: 30px 20px;
     }
-    
     .section-header h2 {
         font-size: 1.3rem;
     }
-    
+    .filtros-row {
+        grid-template-columns: 1fr;
+    }
     .report-preview .preview-info {
         flex-direction: column;
         align-items: flex-start;
         gap: 4px;
     }
-    
     .report-preview .preview-table {
         font-size: 0.6rem;
         min-width: 400px;
     }
-    
     .report-preview .preview-table thead th,
     .report-preview .preview-table tbody td {
         padding: 3px 4px;
         font-size: 0.55rem;
     }
-    
-    .report-preview .preview-footer {
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-    }
 }
 
 @media (max-width: 480px) {
     .stats-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr 1fr;
     }
-    
     .action-buttons {
         flex-direction: column;
     }
-    
     .btn-action {
         width: 100%;
         justify-content: center;
     }
-    
     .report-buttons {
         flex-direction: column;
     }
-    
     .btn-success,
     .btn-danger {
         width: 100%;
         justify-content: center;
     }
-    
     .admin-tabs {
         flex-direction: column;
     }
-    
     .tab-btn {
         width: 100%;
         text-align: center;
     }
-    
     .list-item {
         flex-direction: column;
         align-items: flex-start;
         gap: 10px;
     }
-    
     .list-item .item-actions {
         width: 100%;
         justify-content: flex-end;
     }
-    
     .checkbox-group label {
         font-size: 0.8rem;
         padding: 4px 10px;
     }
-    
     .report-preview .preview-table-wrapper {
         max-height: 250px;
     }
-    
     .report-preview .preview-table {
         font-size: 0.5rem;
         min-width: 350px;
     }
-    
     .report-preview .preview-table thead th,
     .report-preview .preview-table tbody td {
         padding: 2px 3px;
         font-size: 0.5rem;
+    }
+    .filtros-row {
+        grid-template-columns: 1fr;
     }
 }
