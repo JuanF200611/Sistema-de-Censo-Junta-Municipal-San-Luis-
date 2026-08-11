@@ -4,25 +4,26 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
     <title>Sistema Censo - Junta Municipal San Luis</title>
-    
+
     <!-- Firebase -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
-    
+
     <!-- Librerías para PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
-    
+
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <!-- LOGIN SCREEN -->
+
+    <!-- ========== LOGIN ========== -->
     <div id="loginScreen" class="login-container">
         <div class="login-card">
             <div class="login-header">
@@ -51,8 +52,9 @@
         </div>
     </div>
 
-    <!-- MAIN APP -->
+    <!-- ========== MAIN APP ========== -->
     <div id="mainApp" style="display:none;">
+
         <!-- NAVBAR -->
         <nav class="navbar">
             <div class="nav-container">
@@ -76,18 +78,58 @@
 
         <!-- MAIN CONTENT -->
         <main class="main-content">
-            <!-- DASHBOARD -->
+
+            <!-- ===== DASHBOARD ===== -->
             <section id="dashboard" class="section active">
                 <div class="section-header">
                     <h2><i class="fas fa-home"></i> Panel de Control</h2>
                     <p>Bienvenido, <span id="userNameDisplay">Usuario</span></p>
+                    <p id="sectorDisplay" style="color:var(--primary);font-weight:500;margin-top:5px;"></p>
                 </div>
+
+                <!-- Filtros Dashboard - SOLO PARA ADMIN -->
+                <div id="filtrosDashboardContainer" class="filtros-container" style="display:none;">
+                    <div class="filtros-card">
+                        <h3><i class="fas fa-filter"></i> Filtros del Dashboard</h3>
+                        <div class="filtros-row">
+                            <div class="form-group">
+                                <label>Bloque</label>
+                                <select id="filtroBloque">
+                                    <option value="">Todos</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Sector</label>
+                                <select id="filtroSector">
+                                    <option value="">Todos</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Encuestador</label>
+                                <select id="filtroEncuestador">
+                                    <option value="">Todos</option>
+                                </select>
+                            </div>
+                            <button onclick="aplicarFiltrosDashboard()" class="btn-primary" style="width:auto;padding:10px 24px;">
+                                <i class="fas fa-search"></i> Filtrar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-icon"><i class="fas fa-users"></i></div>
                         <div class="stat-info">
                             <h3 id="totalCensados">0</h3>
                             <p>Total Censados</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-user-check"></i></div>
+                        <div class="stat-info">
+                            <h3 id="totalMisCensados">0</h3>
+                            <p>Mis Encuestas</p>
                         </div>
                     </div>
                     <div class="stat-card">
@@ -104,14 +146,8 @@
                             <p>Calles Registradas</p>
                         </div>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-icon"><i class="fas fa-user-check"></i></div>
-                        <div class="stat-info">
-                            <h3 id="totalEncuestadores">0</h3>
-                            <p>Encuestadores</p>
-                        </div>
-                    </div>
                 </div>
+
                 <div class="quick-actions">
                     <h3>Acciones Rápidas</h3>
                     <div class="action-buttons">
@@ -123,7 +159,7 @@
                 </div>
             </section>
 
-            <!-- ADMIN PANEL -->
+            <!-- ===== ADMIN PANEL ===== -->
             <section id="adminPanel" class="section">
                 <div class="section-header">
                     <h2><i class="fas fa-cogs"></i> Panel de Administración</h2>
@@ -138,6 +174,7 @@
                     <button class="tab-btn" data-tab="tabEncuestas">Todas las Encuestas</button>
                 </div>
 
+                <!-- TAB BLOQUES -->
                 <div id="tabBloques" class="tab-content active">
                     <div class="admin-card">
                         <h3><i class="fas fa-plus-circle"></i> Agregar Bloque y Sector</h3>
@@ -173,6 +210,7 @@
                     </div>
                 </div>
 
+                <!-- TAB CALLES -->
                 <div id="tabCalles" class="tab-content">
                     <div class="admin-card">
                         <h3><i class="fas fa-plus-circle"></i> Agregar Calle</h3>
@@ -204,6 +242,7 @@
                     </div>
                 </div>
 
+                <!-- TAB USUARIOS -->
                 <div id="tabUsuarios" class="tab-content">
                     <div class="admin-card">
                         <h3><i class="fas fa-user-plus"></i> Registrar Encuestador</h3>
@@ -220,6 +259,12 @@
                                 <label>Contraseña</label>
                                 <input type="password" id="encuestadorPass" placeholder="Contraseña" required>
                             </div>
+                            <div class="form-group">
+                                <label>Sector Asignado</label>
+                                <select id="encuestadorSectorAsignado" required>
+                                    <option value="">Seleccionar Sector</option>
+                                </select>
+                            </div>
                             <button type="submit" class="btn-primary"><i class="fas fa-user-plus"></i> Registrar Encuestador</button>
                         </form>
                     </div>
@@ -229,7 +274,7 @@
                     </div>
                 </div>
 
-                <!-- TAB: PRESIDENTES DE COMITÉ -->
+                <!-- TAB PRESIDENTES -->
                 <div id="tabPresidentes" class="tab-content">
                     <div class="admin-card">
                         <h3><i class="fas fa-user-tie"></i> Registrar Presidente de Comité</h3>
@@ -265,6 +310,7 @@
                     </div>
                 </div>
 
+                <!-- TAB ENCUESTAS -->
                 <div id="tabEncuestas" class="tab-content">
                     <div class="admin-card">
                         <h3><i class="fas fa-search"></i> Buscar Encuestas</h3>
@@ -288,7 +334,7 @@
                 </div>
             </section>
 
-            <!-- CENSUS FORM -->
+            <!-- ===== CENSUS FORM ===== -->
             <section id="censusForm" class="section">
                 <div class="section-header">
                     <h2><i class="fas fa-clipboard-list"></i> Formulario de Encuesta</h2>
@@ -351,9 +397,11 @@
                             </select>
                         </div>
 
-                        <div class="form-group" style="display:none;">
+                        <div class="form-group">
                             <label>Encuestador</label>
-                            <input type="text" id="censoEncuestador" readonly>
+                            <select id="censoEncuestador">
+                                <option value="">Seleccionar Encuestador</option>
+                            </select>
                         </div>
 
                         <button type="submit" class="btn-primary"><i class="fas fa-check-circle"></i> Guardar Encuesta</button>
@@ -366,7 +414,7 @@
                 </div>
             </section>
 
-            <!-- MIS ENCUESTAS -->
+            <!-- ===== MIS ENCUESTAS ===== -->
             <section id="misEncuestas" class="section">
                 <div class="section-header">
                     <h2><i class="fas fa-list"></i> Mis Encuestas</h2>
@@ -395,38 +443,76 @@
                 </div>
             </section>
 
-            <!-- REPORTS -->
+            <!-- ===== REPORTS ===== -->
             <section id="reports" class="section">
                 <div class="section-header">
                     <h2><i class="fas fa-chart-bar"></i> Generación de Reportes</h2>
                     <p>Exporta datos en Excel y PDF</p>
+                    <p id="reportSectorInfo" style="color:var(--primary);font-weight:500;margin-top:5px;"></p>
                 </div>
 
                 <div class="report-card">
                     <h3><i class="fas fa-file-export"></i> Generar Reporte</h3>
-                    <div class="report-options">
-                        <div class="form-group">
-                            <label>Tipo de Reporte</label>
-                            <select id="reportType">
-                                <option value="todos">Todos los Sectores</option>
-                                <option value="bloque">Por Bloque</option>
-                                <option value="sector">Por Sector</option>
-                            </select>
+
+                    <!-- Filtros - SOLO PARA ADMIN -->
+                    <div id="reportFiltrosAdmin" style="display:none;">
+                        <div class="report-options">
+                            <div class="form-group">
+                                <label>Tipo de Reporte</label>
+                                <select id="reportType">
+                                    <option value="todos">Todos los Sectores</option>
+                                    <option value="bloque">Por Bloque</option>
+                                    <option value="sector">Por Sector</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="reportBloqueGroup" style="display:none;">
+                                <label>Bloque</label>
+                                <select id="reportBloque">
+                                    <option value="">Seleccionar</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="reportSectorGroup" style="display:none;">
+                                <label>Sector</label>
+                                <select id="reportSector">
+                                    <option value="">Seleccionar</option>
+                                </select>
+                            </div>
                         </div>
-                        <div class="form-group" id="reportBloqueGroup" style="display:none;">
-                            <label>Bloque</label>
-                            <select id="reportBloque">
-                                <option value="">Seleccionar</option>
-                            </select>
+
+                        <!-- Rango de fechas -->
+                        <div class="report-options">
+                            <div class="form-group">
+                                <label>Fecha Desde</label>
+                                <input type="date" id="reportFechaDesde">
+                            </div>
+                            <div class="form-group">
+                                <label>Fecha Hasta</label>
+                                <input type="date" id="reportFechaHasta">
+                            </div>
                         </div>
-                        <div class="form-group" id="reportSectorGroup" style="display:none;">
-                            <label>Sector</label>
-                            <select id="reportSector">
-                                <option value="">Seleccionar</option>
-                            </select>
+
+                        <!-- Ordenamiento -->
+                        <div class="report-options">
+                            <div class="form-group">
+                                <label>Ordenar por</label>
+                                <select id="reportOrderBy">
+                                    <option value="nombre">Nombre</option>
+                                    <option value="sector">Sector</option>
+                                    <option value="bloque">Bloque</option>
+                                    <option value="fecha">Fecha</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Orden</label>
+                                <select id="reportOrderDir">
+                                    <option value="asc">Ascendente</option>
+                                    <option value="desc">Descendente</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 
+                    <!-- Columnas -->
                     <div class="report-columns">
                         <h4><i class="fas fa-columns"></i> Seleccionar Columnas para el Reporte</h4>
                         <div class="checkbox-group">
@@ -448,11 +534,11 @@
                         <button onclick="generarReporte('excel')" class="btn-success"><i class="fas fa-file-excel"></i> Exportar Excel</button>
                         <button onclick="generarReporte('pdf')" class="btn-danger"><i class="fas fa-file-pdf"></i> Exportar PDF</button>
                     </div>
-                    <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 15px;">
-                        <button onclick="imprimirTablaFirmas()" class="btn-primary" style="background: #1a3c5e; width: auto; padding: 12px 30px;">
+                    <div style="margin-top:15px;border-top:1px solid #eee;padding-top:15px;">
+                        <button onclick="imprimirTablaFirmas()" class="btn-primary" style="background:#1a3c5e;width:auto;padding:12px 30px;">
                             <i class="fas fa-signature"></i> Imprimir Tabla de Firmas
                         </button>
-                        <p style="font-size: 0.85rem; color: #6b7a8f; margin-top: 8px;">
+                        <p style="font-size:0.85rem;color:#6b7a8f;margin-top:8px;">
                             <i class="fas fa-info-circle"></i> Genera una tabla con Cédula, Nombre y espacio para firma
                         </p>
                     </div>
@@ -465,6 +551,7 @@
                     </div>
                 </div>
             </section>
+
         </main>
 
         <!-- FOOTER -->
