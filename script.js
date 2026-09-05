@@ -11,8 +11,71 @@ const firebaseConfig = {
     appId: "1:123456789012:web:abcdef123456"
 };
 
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
+let firebaseInicializado = false;
+try {
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+        firebaseInicializado = true;
+        console.log('✅ Firebase inicializado correctamente');
+    } else {
+        firebaseInicializado = true;
+    }
+} catch (error) {
+    console.error('❌ Error al inicializar Firebase:', error);
+    firebaseInicializado = false;
+}
+
+const db = firebaseInicializado ? firebase.database() : null;
+
+// ============================================================
+// CONFIGURACIÓN CLOUDINARY
+// ============================================================
+const CLOUDINARY_CLOUD_NAME = 'foj2whcu';
+const CLOUDINARY_UPLOAD_PRESET = 'censo_fotos';
+
+async function subirImagenCloudinary(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+    
+    try {
+        const response = await fetch(
+            `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
+            { method: 'POST', body: formData }
+        );
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error?.message || 'Error al subir imagen');
+        }
+        
+        const data = await response.json();
+        return data.secure_url;
+    } catch (error) {
+        console.error('Error Cloudinary:', error);
+        throw error;
+    }
+}
+
+// ============================================================
+// SISTEMA DE RESPALDO LOCAL (LOCALSTORAGE)
+// ============================================================
+function guardarEnLocal(clave, datos) {
+    try {
+        localStorage.setItem('censo_' + clave, JSON.stringify(datos));
+    } catch (e) {
+        console.warn('No se pudo guardar en localStorage:', e);
+    }
+}
+
+function obtenerDeLocal(clave) {
+    try {
+        const data = localStorage.getItem('censo_' + clave);
+        return data ? JSON.parse(data) : null;
+    } catch (e) {
+        return null;
+    }
+}
 
 // ============================================================
 // VARIABLES GLOBALES
@@ -25,8 +88,14 @@ let callesCache = {};
 let encuestadoresCache = {};
 let presidentesCache = {};
 let censoCache = {};
+let votantesCache = {};
 let listenersActivos = false;
 let selectoresInicializados = false;
+let cropper = null;
+let mediaStream = null;
+let eleccionActiva = false;
+let usandoFirebase = firebaseInicializado;
+let marcaDeAguaActiva = false;
 
 // ============================================================
 // REFERENCIAS EN TIEMPO REAL
@@ -36,6 +105,7 @@ let callesListener = null;
 let encuestadoresListener = null;
 let presidentesListener = null;
 let censoListener = null;
+let votantesListener = null;
 
 // ============================================================
 // FORMATOS AUTOMÁTICOS
@@ -43,7 +113,6 @@ let censoListener = null;
 function formatearCedula(input) {
     let valor = input.value.replace(/\D/g, '');
     if (valor.length > 11) valor = valor.substring(0, 11);
-    
     let resultado = '';
     if (valor.length > 0) {
         resultado = valor.substring(0, 3);
@@ -61,7 +130,6 @@ function formatearCedula(input) {
 function formatearTelefono(input) {
     let valor = input.value.replace(/\D/g, '');
     if (valor.length > 10) valor = valor.substring(0, 10);
-    
     let resultado = '';
     if (valor.length > 0) {
         resultado = '(' + valor.substring(0, 3);
@@ -74,6 +142,10 @@ function formatearTelefono(input) {
     }
     input.value = resultado;
     return resultado;
+}
+
+function limpiarCedula(cedula) {
+    return cedula.replace(/\D/g, '');
 }
 
 // ============================================================
@@ -89,7 +161,6 @@ function showNotification(mensaje, tipo = 'success', duracion = 3000) {
         warning: '#f39c12',
         info: '#3498db'
     };
-    
     const iconos = {
         success: 'fa-check-circle',
         error: 'fa-exclamation-circle',
@@ -118,7 +189,6 @@ function showNotification(mensaje, tipo = 'success', duracion = 3000) {
         font-family: 'Poppins', sans-serif;
         font-size: 0.95rem;
     `;
-    
     notification.innerHTML = `
         <i class="fas ${iconos[tipo] || iconos.success}" style="color: ${colors[tipo] || colors.success}; font-size: 1.5rem;"></i>
         <div style="flex:1;"><span style="color: #2c3e50;">${mensaje}</span></div>
@@ -126,7 +196,6 @@ function showNotification(mensaje, tipo = 'success', duracion = 3000) {
             <i class="fas fa-times"></i>
         </button>
     `;
-    
     document.body.appendChild(notification);
     
     setTimeout(() => {
@@ -195,7 +264,188 @@ function ejecutarConLoading(callback, mensaje = 'Guardando datos...') {
 }
 
 // ============================================================
-// LOGIN
+// FUNCIÓN PARA OBTENER EL ÚLTIMO NÚMERO DE SECUENCIA POR SECTOR
+// ============================================================
+function obtenerUltimoNumeroSecuenciaPorSector(sector) {
+    var items = Object.values(censoCache);
+    var itemsSector = items.filter(function(item) { return item.sector === sector; });
+    
+    if (itemsSector.length === 0) return 0;
+    
+    var maxNumero = 0;
+    itemsSector.forEach(function(item) {
+        if (item.numeroSecuencia && parseInt(item.numeroSecuencia) > maxNumero) {
+            maxNumero = parseInt(item.numeroSecuencia);
+        }
+    });
+    
+    if (maxNumero === 0) {
+        return itemsSector.length;
+    }
+    return maxNumero;
+}
+
+function asignarNumeroSecuencia(sector) {
+    var ultimoNumero = obtenerUltimoNumeroSecuenciaPorSector(sector);
+    return ultimoNumero + 1;
+}
+
+// ============================================================
+// FUNCIONES PARA CÁMARA
+// ============================================================
+async function abrirCamara() {
+    const videoContainer = document.getElementById('videoContainer');
+    const video = document.getElementById('videoCamara');
+    
+    try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+        });
+        video.srcObject = mediaStream;
+        videoContainer.style.display = 'block';
+        await video.play();
+    } catch (error) {
+        showNotification('❌ No se pudo acceder a la cámara: ' + error.message, 'error');
+    }
+}
+
+function capturarFoto() {
+    const video = document.getElementById('videoCamara');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    canvas.toBlob(function(blob) {
+        const file = new File([blob], 'foto_camara.jpg', { type: 'image/jpeg' });
+        const input = document.getElementById('fotoCedula');
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        cerrarCamara();
+        previsualizarFoto();
+        showNotification('✅ Foto capturada correctamente', 'success');
+    }, 'image/jpeg', 0.92);
+}
+
+function cerrarCamara() {
+    const videoContainer = document.getElementById('videoContainer');
+    const video = document.getElementById('videoCamara');
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+    }
+    video.srcObject = null;
+    videoContainer.style.display = 'none';
+}
+
+// ============================================================
+// FUNCIONES DE CROPPER
+// ============================================================
+function previsualizarFoto() {
+    const fileInput = document.getElementById('fotoCedula');
+    const previewDiv = document.getElementById('previewFoto');
+    const previewImg = document.getElementById('previewImg');
+    const cropContainer = document.getElementById('cropContainer');
+    
+    if (fileInput.files && fileInput.files.length > 0) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const imageToCrop = document.getElementById('imageToCrop');
+            imageToCrop.src = e.target.result;
+            cropContainer.style.display = 'block';
+            previewDiv.style.display = 'none';
+            
+            if (cropper) {
+                cropper.destroy();
+                cropper = null;
+            }
+            
+            cropper = new Cropper(imageToCrop, {
+                aspectRatio: 1,
+                viewMode: 1,
+                autoCropArea: 0.8,
+                minCropBoxWidth: 100,
+                minCropBoxHeight: 100,
+                movable: true,
+                zoomable: true,
+                rotatable: true,
+                scalable: true
+            });
+        };
+        reader.readAsDataURL(fileInput.files[0]);
+    } else {
+        previewDiv.style.display = 'none';
+        cropContainer.style.display = 'none';
+    }
+}
+
+function rotarImagen(degrees) {
+    if (cropper) {
+        cropper.rotate(degrees);
+    }
+}
+
+function aplicarCrop() {
+    if (!cropper) return;
+    
+    const croppedCanvas = cropper.getCroppedCanvas({
+        width: 300,
+        height: 300,
+        imageSmoothingEnabled: true,
+        imageSmoothingQuality: 'high'
+    });
+    
+    if (!croppedCanvas) {
+        showNotification('❌ Error al recortar la imagen', 'error');
+        return;
+    }
+    
+    croppedCanvas.toBlob(function(blob) {
+        const file = new File([blob], 'foto_recortada.jpg', { type: 'image/jpeg' });
+        const input = document.getElementById('fotoCedula');
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        
+        const previewImg = document.getElementById('previewImg');
+        previewImg.src = croppedCanvas.toDataURL('image/jpeg', 0.85);
+        document.getElementById('previewFoto').style.display = 'block';
+        document.getElementById('cropContainer').style.display = 'none';
+        document.getElementById('fotoInfo').textContent = `📷 Foto: ${Math.round(file.size / 1024)} KB (optimizada)`;
+        
+        if (cropper) {
+            cropper.destroy();
+            cropper = null;
+        }
+        showNotification('✅ Foto recortada y optimizada correctamente', 'success');
+    }, 'image/jpeg', 0.85);
+}
+
+function cancelarCrop() {
+    if (cropper) {
+        cropper.destroy();
+        cropper = null;
+    }
+    document.getElementById('cropContainer').style.display = 'none';
+    document.getElementById('fotoCedula').value = '';
+}
+
+function eliminarFotoSeleccionada() {
+    const fileInput = document.getElementById('fotoCedula');
+    const previewDiv = document.getElementById('previewFoto');
+    fileInput.value = '';
+    previewDiv.style.display = 'none';
+    document.getElementById('cropContainer').style.display = 'none';
+    if (cropper) {
+        cropper.destroy();
+        cropper = null;
+    }
+}
+
+// ============================================================
+// LOGIN - CORREGIDO
 // ============================================================
 document.getElementById('loginForm').addEventListener('submit', function(e) {
     e.preventDefault();
@@ -212,8 +462,13 @@ document.getElementById('loginForm').addEventListener('submit', function(e) {
         document.getElementById('loginError').textContent = '';
         mostrarMenuAdmin(true);
         mostrarFiltrosAdmin(true);
-        iniciarEscuchaTiempoReal();
-        cargarDatosIniciales();
+        cargarDatosLocales();
+        if (usandoFirebase) {
+            iniciarEscuchaTiempoReal();
+        } else {
+            showNotification('⚠️ Modo sin conexión - Datos locales', 'warning');
+            cargarDatosIniciales();
+        }
         showNotification('✅ Bienvenido Administrador', 'success');
     } else {
         verificarEncuestador(user, pass);
@@ -221,51 +476,112 @@ document.getElementById('loginForm').addEventListener('submit', function(e) {
 });
 
 function verificarEncuestador(user, pass) {
-    db.ref('encuestadores').once('value', snapshot => {
-        let encontrado = false;
-        snapshot.forEach(child => {
-            const data = child.val();
-            if (data.usuario === user && data.contraseña === pass) {
+    showLoading('Verificando credenciales...');
+    
+    let encontrado = false;
+    const encuestadoresLocal = obtenerDeLocal('encuestadores');
+    if (encuestadoresLocal) {
+        Object.keys(encuestadoresLocal).forEach(function(key) {
+            const encuestador = encuestadoresLocal[key];
+            if (encuestador.usuario === user && encuestador.contraseña === pass) {
                 encontrado = true;
-                currentUser = { 
-                    username: user, 
-                    name: data.nombre, 
-                    role: 'encuestador',
-                    id: child.key,
-                    sector: data.sector || null
-                };
-                document.getElementById('userNameDisplay').textContent = data.nombre;
-                if (currentUser.sector) {
-                    document.getElementById('sectorDisplay').textContent = '📍 Sector asignado: ' + currentUser.sector;
-                    document.getElementById('reportSectorInfo').textContent = '📍 Reportes filtrados por sector: ' + currentUser.sector;
-                }
-                document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('mainApp').style.display = 'block';
-                document.getElementById('loginError').textContent = '';
-                mostrarMenuAdmin(false);
-                mostrarFiltrosAdmin(false);
-                iniciarEscuchaTiempoReal();
-                cargarDatosIniciales();
-                document.getElementById('censoEncuestador').value = data.nombre;
-                showNotification('✅ Bienvenido ' + data.nombre, 'success');
+                loginEncuestador(encuestador, key);
             }
         });
+    }
+    
+    if (encontrado) {
+        hideLoading();
+        return;
+    }
+    
+    if (usandoFirebase && db) {
+        db.ref('encuestadores').once('value')
+            .then(function(snapshot) {
+                hideLoading();
+                const data = snapshot.val();
+                
+                if (data) {
+                    Object.keys(data).forEach(function(key) {
+                        const encuestador = data[key];
+                        if (encuestador.usuario === user && encuestador.contraseña === pass) {
+                            encontrado = true;
+                            const localData = obtenerDeLocal('encuestadores') || {};
+                            localData[key] = encuestador;
+                            guardarEnLocal('encuestadores', localData);
+                            loginEncuestador(encuestador, key);
+                        }
+                    });
+                }
+                
+                if (!encontrado) {
+                    document.getElementById('loginError').textContent = 'Usuario o contraseña incorrectos';
+                    showNotification('❌ Usuario o contraseña incorrectos', 'error');
+                }
+            })
+            .catch(function(error) {
+                hideLoading();
+                document.getElementById('loginError').textContent = 'Error al verificar: ' + error.message;
+                showNotification('❌ Error al verificar credenciales', 'error');
+            });
+    } else {
+        hideLoading();
         if (!encontrado) {
             document.getElementById('loginError').textContent = 'Usuario o contraseña incorrectos';
+            showNotification('❌ Usuario o contraseña incorrectos', 'error');
         }
-    });
+    }
+}
+
+function loginEncuestador(encuestador, key) {
+    currentUser = {
+        username: encuestador.usuario,
+        name: encuestador.nombre,
+        role: 'encuestador',
+        id: key,
+        sector: encuestador.sector || null
+    };
+    document.getElementById('userNameDisplay').textContent = encuestador.nombre;
+    if (currentUser.sector) {
+        document.getElementById('sectorDisplay').textContent = '📍 Sector asignado: ' + currentUser.sector;
+        document.getElementById('reportSectorInfo').textContent = '📍 Reportes filtrados por sector: ' + currentUser.sector;
+    }
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('mainApp').style.display = 'block';
+    document.getElementById('loginError').textContent = '';
+    mostrarMenuAdmin(false);
+    mostrarFiltrosAdmin(false);
+    mostrarMenuVotacion(false);
+    cargarDatosLocales();
+    if (usandoFirebase) {
+        iniciarEscuchaTiempoReal();
+    } else {
+        showNotification('⚠️ Modo sin conexión - Datos locales', 'warning');
+        cargarDatosIniciales();
+    }
+    // El encuestador se asigna automáticamente
+    document.getElementById('censoEncuestador').value = encuestador.nombre;
+    document.getElementById('censoEncuestador').disabled = true;
+    showNotification('✅ Bienvenido ' + encuestador.nombre, 'success');
 }
 
 function mostrarMenuAdmin(esAdmin) {
     document.getElementById('menuAdmin').style.display = esAdmin ? 'block' : 'none';
     document.getElementById('menuReportes').style.display = esAdmin ? 'block' : 'none';
+    document.getElementById('menuVotacion').style.display = esAdmin ? 'block' : 'none';
     document.getElementById('btnAdmin').style.display = esAdmin ? 'inline-flex' : 'none';
     document.getElementById('btnReportes').style.display = esAdmin ? 'inline-flex' : 'none';
+    document.getElementById('btnVotacion').style.display = esAdmin ? 'inline-flex' : 'none';
+}
+
+function mostrarMenuVotacion(visible) {
+    document.getElementById('menuVotacion').style.display = visible ? 'block' : 'none';
+    document.getElementById('btnVotacion').style.display = visible ? 'inline-flex' : 'none';
 }
 
 function mostrarFiltrosAdmin(esAdmin) {
-    document.getElementById('filtrosDashboardContainer').style.display = esAdmin ? 'block' : 'none';
-    document.getElementById('reportFiltrosAdmin').style.display = esAdmin ? 'block' : 'none';
+    const reportFiltros = document.getElementById('reportFiltrosAdmin');
+    if (reportFiltros) reportFiltros.style.display = esAdmin ? 'block' : 'none';
 }
 
 function logout() {
@@ -275,10 +591,13 @@ function logout() {
         if (encuestadoresListener) { encuestadoresListener.off(); encuestadoresListener = null; }
         if (presidentesListener) { presidentesListener.off(); presidentesListener = null; }
         if (censoListener) { censoListener.off(); censoListener = null; }
+        if (votantesListener) { votantesListener.off(); votantesListener = null; }
+        
         listenersActivos = false;
         selectoresInicializados = false;
-        
         currentUser = null;
+        cerrarCamara();
+        
         document.getElementById('loginScreen').style.display = 'flex';
         document.getElementById('mainApp').style.display = 'none';
         document.getElementById('loginUser').value = '';
@@ -286,6 +605,49 @@ function logout() {
         document.getElementById('loginError').textContent = '';
         showNotification('👋 Sesión cerrada correctamente', 'info');
     }
+}
+
+// ============================================================
+// CARGAR DATOS LOCALES
+// ============================================================
+function cargarDatosLocales() {
+    const bloques = obtenerDeLocal('bloques');
+    if (bloques) {
+        bloquesCache = bloques;
+        actualizarUI('bloques');
+    }
+    
+    const calles = obtenerDeLocal('calles');
+    if (calles) {
+        callesCache = calles;
+        actualizarUI('calles');
+    }
+    
+    const encuestadores = obtenerDeLocal('encuestadores');
+    if (encuestadores) {
+        encuestadoresCache = encuestadores;
+        actualizarUI('encuestadores');
+    }
+    
+    const presidentes = obtenerDeLocal('presidentes');
+    if (presidentes) {
+        presidentesCache = presidentes;
+        actualizarUI('presidentes');
+    }
+    
+    const censo = obtenerDeLocal('censo');
+    if (censo) {
+        censoCache = censo;
+        actualizarUI('censo');
+    }
+    
+    const votantes = obtenerDeLocal('votantes');
+    if (votantes) {
+        votantesCache = votantes;
+        actualizarUI('votantes');
+    }
+    
+    cargarDatosIniciales();
 }
 
 // ============================================================
@@ -305,10 +667,17 @@ function showSection(sectionId) {
     if (sectionId === 'adminPanel' && currentUser && currentUser.role === 'admin') {
         cargarTodasEncuestas();
         cargarPresidentesUI();
+        cargarVotantesAdmin();
     }
     if (sectionId === 'misEncuestas') {
         cargarMisEncuestas();
     }
+    if (sectionId === 'votacion') {
+        cargarVotantesHoy();
+        cargarBloquesVotacion();
+    }
+    
+    document.getElementById('navMenu').classList.remove('open');
 }
 
 document.getElementById('navToggle').addEventListener('click', function() {
@@ -319,7 +688,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', function() {
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         this.classList.add('active');
-        
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         document.getElementById(this.dataset.tab).classList.add('active');
         
@@ -327,14 +695,15 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         if (this.dataset.tab === 'tabUsuarios') cargarEncuestadoresUI();
         if (this.dataset.tab === 'tabPresidentes') cargarPresidentesUI();
         if (this.dataset.tab === 'tabEncuestas') cargarTodasEncuestas();
+        if (this.dataset.tab === 'tabVotantes') cargarVotantesAdmin();
     });
 });
 
 // ============================================================
-// ESCUCHA EN TIEMPO REAL
+// ESCUCHA EN TIEMPO REAL (FIREBASE)
 // ============================================================
 function iniciarEscuchaTiempoReal() {
-    if (listenersActivos) return;
+    if (listenersActivos || !usandoFirebase || !db) return;
     listenersActivos = true;
     
     bloquesListener = db.ref('bloques');
@@ -351,11 +720,12 @@ function iniciarEscuchaTiempoReal() {
         Object.keys(bloquesCache).forEach(bloque => {
             bloquesCache[bloque].sort((a, b) => a.sector.localeCompare(b.sector));
         });
+        guardarEnLocal('bloques', bloquesCache);
         actualizarUI('bloques');
         actualizarSelectoresCenso();
         cargarBloquesParaCalle();
         cargarBloquesParaPresidente();
-        cargarFiltrosDashboard();
+        cargarBloquesVotacion();
         cargarSelectoresReporte();
     });
     
@@ -368,6 +738,7 @@ function iniciarEscuchaTiempoReal() {
             const id = data.bloque + '_' + data.sector + '_' + data.nombre;
             callesCache[id] = { ...data, key: key };
         });
+        guardarEnLocal('calles', callesCache);
         actualizarUI('calles');
         actualizarSelectoresCenso();
     });
@@ -379,9 +750,9 @@ function iniciarEscuchaTiempoReal() {
             const data = child.val();
             encuestadoresCache[child.key] = data;
         });
+        guardarEnLocal('encuestadores', encuestadoresCache);
         actualizarUI('encuestadores');
         cargarSelectorEncuestadores();
-        cargarFiltrosDashboard();
     });
     
     presidentesListener = db.ref('presidentes');
@@ -391,6 +762,7 @@ function iniciarEscuchaTiempoReal() {
             const data = child.val();
             presidentesCache[child.key] = data;
         });
+        guardarEnLocal('presidentes', presidentesCache);
         actualizarUI('presidentes');
         cargarPresidentesUI();
     });
@@ -401,12 +773,34 @@ function iniciarEscuchaTiempoReal() {
         snapshot.forEach(child => {
             censoCache[child.key] = child.val();
         });
+        guardarEnLocal('censo', censoCache);
         actualizarUI('censo');
-        actualizarEstadisticas();
-        cargarUltimasEncuestas();
         if (document.getElementById('misEncuestas').classList.contains('active')) {
             cargarMisEncuestas();
         }
+        if (document.getElementById('reports').classList.contains('active')) {
+            cargarDatosReporte();
+        }
+        if (document.getElementById('adminPanel').classList.contains('active')) {
+            cargarTodasEncuestas();
+        }
+    });
+    
+    votantesListener = db.ref('votantes');
+    votantesListener.on('value', snapshot => {
+        votantesCache = {};
+        snapshot.forEach(child => {
+            votantesCache[child.key] = child.val();
+        });
+        guardarEnLocal('votantes', votantesCache);
+        actualizarUI('votantes');
+        if (document.getElementById('votacion').classList.contains('active')) {
+            cargarVotantesHoy();
+        }
+        if (document.getElementById('adminPanel').classList.contains('active')) {
+            cargarVotantesAdmin();
+        }
+        actualizarEstadisticas();
     });
 }
 
@@ -429,6 +823,9 @@ function actualizarUI(tipo) {
         actualizarEstadisticas();
         cargarUltimasEncuestas();
     }
+    if (tipo === 'votantes' || tipo === 'todos') {
+        actualizarEstadisticas();
+    }
 }
 
 // ============================================================
@@ -437,35 +834,55 @@ function actualizarUI(tipo) {
 function cargarDatosIniciales() {
     actualizarUI('todos');
     cargarSelectoresCenso();
-    if (currentUser && currentUser.name) {
+    
+    // Si es encuestador, asignar su nombre automáticamente y deshabilitar el campo
+    if (currentUser && currentUser.name && currentUser.role === 'encuestador') {
+        document.getElementById('censoEncuestador').value = currentUser.name;
+        document.getElementById('censoEncuestador').disabled = true;
+    } else if (currentUser && currentUser.name) {
         document.getElementById('censoEncuestador').value = currentUser.name;
     }
+    
+    document.getElementById('fotoCedula').addEventListener('change', previsualizarFoto);
     
     var inputCedula = document.getElementById('cedula');
     var inputTelefono = document.getElementById('telefono');
     
-    inputCedula.addEventListener('input', function() {
-        formatearCedula(this);
-    });
+    if (inputCedula) {
+        inputCedula.addEventListener('input', function() { formatearCedula(this); });
+        inputCedula.addEventListener('paste', function() { setTimeout(function() { formatearCedula(inputCedula); }, 10); });
+    }
     
-    inputTelefono.addEventListener('input', function() {
-        formatearTelefono(this);
-    });
+    if (inputTelefono) {
+        inputTelefono.addEventListener('input', function() { formatearTelefono(this); });
+        inputTelefono.addEventListener('paste', function() { setTimeout(function() { formatearTelefono(inputTelefono); }, 10); });
+    }
     
-    inputCedula.addEventListener('paste', function() {
-        setTimeout(function() { formatearCedula(inputCedula); }, 10);
-    });
-    
-    inputTelefono.addEventListener('paste', function() {
-        setTimeout(function() { formatearTelefono(inputTelefono); }, 10);
-    });
+    // ============================================================
+    // EVENTO PARA TIPO DE DOCUMENTO - AUTOMÁTICO NACIONALIDAD
+    // ============================================================
+    var tipoDocumento = document.getElementById('tipoDocumento');
+    if (tipoDocumento) {
+        tipoDocumento.addEventListener('change', function() {
+            var nacionalidadSelect = document.getElementById('nacionalidad');
+            if (this.value === 'cedula') {
+                nacionalidadSelect.value = 'dominicana';
+                nacionalidadSelect.disabled = true;
+                showNotification('✅ Nacionalidad establecida como Dominicana (Cédula dominicana)', 'info', 2000);
+            } else {
+                nacionalidadSelect.disabled = false;
+                nacionalidadSelect.value = '';
+            }
+        });
+    }
     
     setTimeout(function() {
         cargarBloquesParaCalle();
         cargarBloquesParaPresidente();
-        cargarFiltrosDashboard();
+        cargarBloquesVotacion();
         cargarSelectoresReporte();
         cargarSectoresEnAsignacion();
+        cargarVotantesHoy();
     }, 500);
 }
 
@@ -475,7 +892,6 @@ function cargarDatosIniciales() {
 function cargarSectoresEnAsignacion() {
     var select = document.getElementById('encuestadorSectorAsignado');
     if (!select) return;
-    
     select.innerHTML = '<option value="">Seleccionar Sector</option>';
     Object.keys(bloquesCache).forEach(function(bloque) {
         var sectores = bloquesCache[bloque] || [];
@@ -496,6 +912,8 @@ function cargarSelectoresCenso() {
     var selectSector = document.getElementById('censoSector');
     var selectCalle = document.getElementById('censoCalle');
     
+    if (!selectBloque || !selectSector || !selectCalle) return;
+    
     selectBloque.innerHTML = '<option value="">Seleccionar Bloque</option>';
     selectSector.innerHTML = '<option value="">Seleccionar Sector</option>';
     selectCalle.innerHTML = '<option value="">Seleccionar Calle</option>';
@@ -504,6 +922,13 @@ function cargarSelectoresCenso() {
     var bloques = Object.keys(bloquesCache).sort(function(a, b) {
         return ordenRomanos.indexOf(a) - ordenRomanos.indexOf(b);
     });
+    
+    if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
+        bloques = bloques.filter(function(bloque) {
+            var sectores = bloquesCache[bloque] || [];
+            return sectores.some(function(s) { return s.sector === currentUser.sector; });
+        });
+    }
     
     bloques.forEach(function(bloque) {
         var opt = document.createElement('option');
@@ -514,23 +939,24 @@ function cargarSelectoresCenso() {
     
     var nuevoSelectBloque = selectBloque.cloneNode(true);
     selectBloque.parentNode.replaceChild(nuevoSelectBloque, selectBloque);
-    
     var nuevoSelectSector = selectSector.cloneNode(true);
     selectSector.parentNode.replaceChild(nuevoSelectSector, selectSector);
-    
     var nuevoSelectCalle = selectCalle.cloneNode(true);
     selectCalle.parentNode.replaceChild(nuevoSelectCalle, selectCalle);
     
     document.getElementById('censoBloque').addEventListener('change', function() {
         cargarSectoresPorBloque(this.value);
     });
-    
     document.getElementById('censoSector').addEventListener('change', function() {
         var bloque = document.getElementById('censoBloque').value;
         cargarCallesPorBloqueYSector(bloque, this.value);
     });
     
-    if (currentUser && currentUser.name) {
+    // Si es encuestador, asignar su nombre automáticamente y deshabilitar
+    if (currentUser && currentUser.name && currentUser.role === 'encuestador') {
+        document.getElementById('censoEncuestador').value = currentUser.name;
+        document.getElementById('censoEncuestador').disabled = true;
+    } else if (currentUser && currentUser.name) {
         document.getElementById('censoEncuestador').value = currentUser.name;
     }
     
@@ -541,13 +967,11 @@ function cargarSelectoresCenso() {
 function cargarSectoresPorBloque(bloque) {
     var selectSector = document.getElementById('censoSector');
     var selectCalle = document.getElementById('censoCalle');
-    
     selectSector.innerHTML = '<option value="">Seleccionar Sector</option>';
     selectCalle.innerHTML = '<option value="">Seleccionar Calle</option>';
     
     if (bloque && bloquesCache[bloque]) {
         var sectores = bloquesCache[bloque];
-        // Si es encuestador, solo mostrar su sector
         if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
             sectores = sectores.filter(function(s) { return s.sector === currentUser.sector; });
         }
@@ -569,7 +993,6 @@ function cargarCallesPorBloqueYSector(bloque, sector) {
             return c.bloque === bloque && c.sector === sector;
         });
         calles.sort(function(a, b) { return a.nombre.localeCompare(b.nombre); });
-        
         calles.forEach(function(c) {
             var opt = document.createElement('option');
             opt.value = c.nombre;
@@ -592,7 +1015,6 @@ function actualizarSelectoresCenso() {
         return ordenRomanos.indexOf(a) - ordenRomanos.indexOf(b);
     });
     
-    // Si es encuestador, solo mostrar bloques que contengan su sector
     if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
         bloques = bloques.filter(function(bloque) {
             var sectores = bloquesCache[bloque] || [];
@@ -622,6 +1044,7 @@ function actualizarSelectoresCenso() {
 // ============================================================
 function cargarBloquesUI() {
     var container = document.getElementById('bloqueList');
+    if (!container) return;
     container.innerHTML = '';
     
     var ordenRomanos = ['I','II','III','IV','V','VI','VII','VIII','IX','X'];
@@ -637,7 +1060,6 @@ function cargarBloquesUI() {
     sortedBloques.forEach(function(bloque) {
         var sectores = bloquesCache[bloque] || [];
         var sectoresNombres = sectores.map(function(s) { return s.sector; }).join(', ');
-        
         var div = document.createElement('div');
         div.className = 'list-item';
         div.innerHTML = `
@@ -657,36 +1079,45 @@ function cargarBloquesUI() {
 
 function eliminarBloque(bloque) {
     if (!confirm('⚠️ ¿Eliminar TODO el Bloque ' + bloque + ' y TODOS sus sectores?')) return;
-    
     ejecutarConLoading(function() {
         var sectores = bloquesCache[bloque] || [];
         var updates = {};
         sectores.forEach(function(s) {
             updates[s.key] = null;
         });
-        db.ref('bloques').update(updates)
-            .then(function() { showNotification('✅ Bloque eliminado correctamente', 'success'); })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('bloques').update(updates)
+                .then(function() { 
+                    showNotification('✅ Bloque eliminado correctamente', 'success');
+                    guardarEnLocal('bloques', bloquesCache);
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            sectores.forEach(function(s) {
+                delete bloquesCache[bloque];
+            });
+            guardarEnLocal('bloques', bloquesCache);
+            cargarBloquesUI();
+            showNotification('✅ Bloque eliminado (local)', 'success');
+        }
     }, 'Eliminando bloque...');
 }
 
 function cargarSectoresUI() {
     var select = document.getElementById('calleSectorSelect');
-    if (select) {
-        select.innerHTML = '<option value="">Seleccionar</option>';
-        Object.keys(bloquesCache).forEach(function(bloque) {
-            var sectores = bloquesCache[bloque] || [];
-            sectores.forEach(function(s) {
-                var option = document.createElement('option');
-                option.value = s.sector;
-                option.textContent = s.sector + ' (Bloque ' + bloque + ')';
-                option.dataset.bloque = bloque;
-                option.dataset.key = s.key;
-                select.appendChild(option);
-            });
+    if (!select) return;
+    select.innerHTML = '<option value="">Seleccionar</option>';
+    Object.keys(bloquesCache).forEach(function(bloque) {
+        var sectores = bloquesCache[bloque] || [];
+        sectores.forEach(function(s) {
+            var option = document.createElement('option');
+            option.value = s.sector;
+            option.textContent = s.sector + ' (Bloque ' + bloque + ')';
+            option.dataset.bloque = bloque;
+            option.dataset.key = s.key;
+            select.appendChild(option);
         });
-    }
-    
+    });
     cargarSectoresEnAsignacion();
 }
 
@@ -711,13 +1142,26 @@ document.getElementById('bloqueForm').addEventListener('submit', function(e) {
         var key = bloque + '_' + sector.replace(/\s/g, '_');
         var data = { bloque: bloque, sector: sector };
         
-        db.ref('bloques/' + key).set(data)
-            .then(function() {
-                document.getElementById('sectorNombre').value = '';
-                document.getElementById('bloqueSelect').value = '';
-                showNotification('✅ Bloque y sector guardados correctamente', 'success');
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('bloques/' + key).set(data)
+                .then(function() {
+                    document.getElementById('sectorNombre').value = '';
+                    document.getElementById('bloqueSelect').value = '';
+                    showNotification('✅ Bloque y sector guardados correctamente', 'success');
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            if (!bloquesCache[bloque]) {
+                bloquesCache[bloque] = [];
+            }
+            bloquesCache[bloque].push({ sector: sector, key: key });
+            guardarEnLocal('bloques', bloquesCache);
+            document.getElementById('sectorNombre').value = '';
+            document.getElementById('bloqueSelect').value = '';
+            cargarBloquesUI();
+            cargarSectoresUI();
+            showNotification('✅ Bloque y sector guardados (local)', 'success');
+        }
     }, 'Guardando bloque y sector...');
 });
 
@@ -726,16 +1170,17 @@ document.getElementById('bloqueForm').addEventListener('submit', function(e) {
 // ============================================================
 function cargarCallesUI() {
     var container = document.getElementById('calleList');
+    if (!container) return;
     container.innerHTML = '';
     
     var calles = Object.values(callesCache);
+    
     if (calles.length === 0) {
         container.innerHTML = '<p style="color:var(--gray-dark);padding:10px;">No hay calles registradas</p>';
         return;
     }
     
     calles.sort(function(a, b) { return a.bloque.localeCompare(b.bloque) || a.sector.localeCompare(b.sector); });
-    
     calles.forEach(function(calle) {
         var div = document.createElement('div');
         div.className = 'list-item';
@@ -777,22 +1222,36 @@ document.getElementById('calleForm').addEventListener('submit', function(e) {
         var key = bloque + '_' + sector + '_' + nombre.replace(/\s/g, '_');
         var data = { bloque: bloque, sector: sector, nombre: nombre };
         
-        db.ref('calles/' + key).set(data)
-            .then(function() {
-                document.getElementById('calleNombre').value = '';
-                showNotification('✅ Calle guardada correctamente', 'success');
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('calles/' + key).set(data)
+                .then(function() {
+                    document.getElementById('calleNombre').value = '';
+                    showNotification('✅ Calle guardada correctamente', 'success');
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            callesCache[key] = data;
+            guardarEnLocal('calles', callesCache);
+            document.getElementById('calleNombre').value = '';
+            cargarCallesUI();
+            showNotification('✅ Calle guardada (local)', 'success');
+        }
     }, 'Guardando calle...');
 });
 
 function eliminarCalle(key) {
     if (!confirm('⚠️ ¿Eliminar esta calle?')) return;
-    
     ejecutarConLoading(function() {
-        db.ref('calles/' + key).remove()
-            .then(function() { showNotification('✅ Calle eliminada', 'success'); })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('calles/' + key).remove()
+                .then(function() { showNotification('✅ Calle eliminada', 'success'); })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            delete callesCache[key];
+            guardarEnLocal('calles', callesCache);
+            cargarCallesUI();
+            showNotification('✅ Calle eliminada (local)', 'success');
+        }
     }, 'Eliminando calle...');
 }
 
@@ -826,7 +1285,6 @@ function cargarSectoresParaCalle(bloque) {
     if (!selectSector) return;
     
     selectSector.innerHTML = '<option value="">Seleccionar Sector</option>';
-    
     if (bloque && bloquesCache[bloque]) {
         bloquesCache[bloque].forEach(function(s) {
             var opt = document.createElement('option');
@@ -838,13 +1296,15 @@ function cargarSectoresParaCalle(bloque) {
 }
 
 // ============================================================
-// ENCUESTADORES - CON BOTÓN DE EDICIÓN
+// ENCUESTADORES
 // ============================================================
 function cargarEncuestadoresUI() {
     var container = document.getElementById('encuestadorList');
+    if (!container) return;
     container.innerHTML = '';
     
     var keys = Object.keys(encuestadoresCache);
+    
     if (keys.length === 0) {
         container.innerHTML = '<p style="color:var(--gray-dark);padding:10px;">No hay encuestadores registrados</p>';
         return;
@@ -870,7 +1330,6 @@ function cargarEncuestadoresUI() {
         `;
         container.appendChild(div);
     });
-    
     cargarSelectorEncuestadores();
     cargarSectoresEnAsignacion();
 }
@@ -889,37 +1348,54 @@ document.getElementById('usuarioForm').addEventListener('submit', function(e) {
     
     ejecutarConLoading(function() {
         var key = 'encuestador_' + Date.now();
-        var data = { 
-            nombre: nombre, 
-            usuario: usuario, 
+        var data = {
+            nombre: nombre,
+            usuario: usuario,
             contraseña: contraseña,
             sector: sector,
             registradoPor: (currentUser && currentUser.name) || 'Admin',
             fechaRegistro: new Date().toISOString()
         };
         
-        db.ref('encuestadores/' + key).set(data)
-            .then(function() {
-                document.getElementById('encuestadorNombre').value = '';
-                document.getElementById('encuestadorUser').value = '';
-                document.getElementById('encuestadorPass').value = '';
-                document.getElementById('encuestadorSectorAsignado').value = '';
-                showNotification('✅ Encuestador registrado correctamente', 'success');
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('encuestadores/' + key).set(data)
+                .then(function() {
+                    document.getElementById('encuestadorNombre').value = '';
+                    document.getElementById('encuestadorUser').value = '';
+                    document.getElementById('encuestadorPass').value = '';
+                    document.getElementById('encuestadorSectorAsignado').value = '';
+                    showNotification('✅ Encuestador registrado correctamente', 'success');
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            encuestadoresCache[key] = data;
+            guardarEnLocal('encuestadores', encuestadoresCache);
+            document.getElementById('encuestadorNombre').value = '';
+            document.getElementById('encuestadorUser').value = '';
+            document.getElementById('encuestadorPass').value = '';
+            document.getElementById('encuestadorSectorAsignado').value = '';
+            cargarEncuestadoresUI();
+            showNotification('✅ Encuestador registrado (local)', 'success');
+        }
     }, 'Registrando encuestador...');
 });
 
 function eliminarEncuestador(key) {
     if (!confirm('⚠️ ¿Eliminar este encuestador?')) return;
-    
     ejecutarConLoading(function() {
-        db.ref('encuestadores/' + key).remove()
-            .then(function() {
-                showNotification('✅ Encuestador eliminado', 'success');
-                cargarEncuestadoresUI();
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('encuestadores/' + key).remove()
+                .then(function() {
+                    showNotification('✅ Encuestador eliminado', 'success');
+                    cargarEncuestadoresUI();
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            delete encuestadoresCache[key];
+            guardarEnLocal('encuestadores', encuestadoresCache);
+            cargarEncuestadoresUI();
+            showNotification('✅ Encuestador eliminado (local)', 'success');
+        }
     }, 'Eliminando encuestador...');
 }
 
@@ -930,7 +1406,7 @@ function editarEncuestador(key) {
         return;
     }
     
-    var opciones = 'Seleccione el sector para asignar al encuestador:\n\n';
+    var opciones = 'Seleccione el sector para asignar al encuestador:\n';
     var sectores = [];
     Object.keys(bloquesCache).forEach(function(bloque) {
         var sectoresBloque = bloquesCache[bloque] || [];
@@ -948,8 +1424,8 @@ function editarEncuestador(key) {
     
     opciones += '\nIngrese el número del sector (1-' + sectores.length + '):';
     var seleccion = prompt(opciones, '');
-    
     if (seleccion === null) return;
+    
     var idx = parseInt(seleccion) - 1;
     if (isNaN(idx) || idx < 0 || idx >= sectores.length) {
         showNotification('❌ Selección inválida', 'error');
@@ -962,18 +1438,33 @@ function editarEncuestador(key) {
     if (!confirm('¿Asignar el sector "' + sectorNombre + '" al encuestador "' + data.nombre + '"?')) return;
     
     ejecutarConLoading(function() {
-        db.ref('encuestadores/' + key).update({ sector: sectorNombre })
-            .then(function() {
-                showNotification('✅ Sector "' + sectorNombre + '" asignado a ' + data.nombre, 'success');
-                cargarEncuestadoresUI();
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('encuestadores/' + key).update({ sector: sectorNombre })
+                .then(function() {
+                    showNotification('✅ Sector "' + sectorNombre + '" asignado a ' + data.nombre, 'success');
+                    cargarEncuestadoresUI();
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            encuestadoresCache[key].sector = sectorNombre;
+            guardarEnLocal('encuestadores', encuestadoresCache);
+            cargarEncuestadoresUI();
+            showNotification('✅ Sector "' + sectorNombre + '" asignado (local)', 'success');
+        }
     }, 'Asignando sector...');
 }
 
 function cargarSelectorEncuestadores() {
     var select = document.getElementById('censoEncuestador');
     if (!select) return;
+    
+    // Si es encuestador, no mostrar lista desplegable, solo su nombre
+    if (currentUser && currentUser.role === 'encuestador') {
+        select.innerHTML = `<option value="${currentUser.name}">${currentUser.name}</option>`;
+        select.value = currentUser.name;
+        select.disabled = true;
+        return;
+    }
     
     select.innerHTML = '<option value="">Seleccionar Encuestador</option>';
     Object.values(encuestadoresCache).forEach(function(data) {
@@ -982,6 +1473,7 @@ function cargarSelectorEncuestadores() {
         opt.textContent = data.nombre;
         select.appendChild(opt);
     });
+    
     if (currentUser && currentUser.name) {
         select.value = currentUser.name;
     }
@@ -1017,7 +1509,6 @@ function cargarSectoresParaPresidente(bloque) {
     if (!selectSector) return;
     
     selectSector.innerHTML = '<option value="">Seleccionar Sector</option>';
-    
     if (bloque && bloquesCache[bloque]) {
         bloquesCache[bloque].forEach(function(s) {
             var opt = document.createElement('option');
@@ -1050,32 +1541,45 @@ document.getElementById('presidenteForm').addEventListener('submit', function(e)
     
     ejecutarConLoading(function() {
         var key = 'presidente_' + Date.now();
-        var data = { 
-            bloque: bloque, 
-            sector: sector, 
+        var data = {
+            bloque: bloque,
+            sector: sector,
             nombre: nombre,
             cedula: cedula || '',
             registradoPor: (currentUser && currentUser.name) || 'Admin',
             fechaRegistro: new Date().toISOString()
         };
         
-        db.ref('presidentes/' + key).set(data)
-            .then(function() {
-                document.getElementById('presidenteNombre').value = '';
-                document.getElementById('presidenteCedula').value = '';
-                document.getElementById('presidenteBloque').value = '';
-                document.getElementById('presidenteSector').innerHTML = '<option value="">Seleccionar</option>';
-                showNotification('✅ Presidente de comité registrado correctamente', 'success');
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('presidentes/' + key).set(data)
+                .then(function() {
+                    document.getElementById('presidenteNombre').value = '';
+                    document.getElementById('presidenteCedula').value = '';
+                    document.getElementById('presidenteBloque').value = '';
+                    document.getElementById('presidenteSector').innerHTML = '<option value="">Seleccionar</option>';
+                    showNotification('✅ Presidente de comité registrado correctamente', 'success');
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            presidentesCache[key] = data;
+            guardarEnLocal('presidentes', presidentesCache);
+            document.getElementById('presidenteNombre').value = '';
+            document.getElementById('presidenteCedula').value = '';
+            document.getElementById('presidenteBloque').value = '';
+            document.getElementById('presidenteSector').innerHTML = '<option value="">Seleccionar</option>';
+            cargarPresidentesUI();
+            showNotification('✅ Presidente registrado (local)', 'success');
+        }
     }, 'Registrando presidente...');
 });
 
 function cargarPresidentesUI() {
     var container = document.getElementById('presidenteList');
+    if (!container) return;
     container.innerHTML = '';
     
     var keys = Object.keys(presidentesCache);
+    
     if (keys.length === 0) {
         container.innerHTML = '<p style="color:var(--gray-dark);padding:10px;">No hay presidentes de comité registrados</p>';
         return;
@@ -1102,11 +1606,17 @@ function cargarPresidentesUI() {
 
 function eliminarPresidente(key) {
     if (!confirm('⚠️ ¿Eliminar este presidente de comité?')) return;
-    
     ejecutarConLoading(function() {
-        db.ref('presidentes/' + key).remove()
-            .then(function() { showNotification('✅ Presidente eliminado correctamente', 'success'); })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('presidentes/' + key).remove()
+                .then(function() { showNotification('✅ Presidente eliminado correctamente', 'success'); })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            delete presidentesCache[key];
+            guardarEnLocal('presidentes', presidentesCache);
+            cargarPresidentesUI();
+            showNotification('✅ Presidente eliminado (local)', 'success');
+        }
     }, 'Eliminando presidente...');
 }
 
@@ -1121,72 +1631,179 @@ function getPresidentePorSector(bloque, sector) {
 }
 
 // ============================================================
-// CENSO (Encuestas)
+// CENSO (Encuestas) - CON CLOUDINARY Y NUEVOS CAMPOS
 // ============================================================
-document.getElementById('censusFormData').addEventListener('submit', function(e) {
+document.getElementById('censusFormData').addEventListener('submit', async function(e) {
     e.preventDefault();
     
+    var tipoDocumento = document.getElementById('tipoDocumento').value;
     var cedula = document.getElementById('cedula').value.trim();
+    var nombre = document.getElementById('nombreCompleto').value.trim();
+    var nacionalidad = document.getElementById('nacionalidad').value;
+    var sexo = document.getElementById('sexo').value;
+    var direccion = document.getElementById('direccion').value.trim();
+    var telefono = document.getElementById('telefono').value.trim();
+    var bloque = document.getElementById('censoBloque').value;
+    var sector = document.getElementById('censoSector').value;
+    var calle = document.getElementById('censoCalle').value;
     var encuestador = (currentUser && currentUser.name) || document.getElementById('censoEncuestador').value || 'Desconocido';
     
+    // VALIDACIÓN COMPLETA
+    if (!tipoDocumento) {
+        showNotification('⚠️ Seleccione el tipo de documento', 'warning');
+        return;
+    }
+    if (!cedula) {
+        showNotification('⚠️ Ingrese el número de documento', 'warning');
+        return;
+    }
+    if (!nombre) {
+        showNotification('⚠️ Ingrese el nombre completo', 'warning');
+        return;
+    }
+    if (!nacionalidad) {
+        showNotification('⚠️ Seleccione la nacionalidad', 'warning');
+        return;
+    }
+    if (!sexo) {
+        showNotification('⚠️ Seleccione el sexo', 'warning');
+        return;
+    }
+    if (!direccion) {
+        showNotification('⚠️ Ingrese la dirección', 'warning');
+        return;
+    }
+    if (!bloque) {
+        showNotification('⚠️ Seleccione el bloque', 'warning');
+        return;
+    }
+    if (!sector) {
+        showNotification('⚠️ Seleccione el sector', 'warning');
+        return;
+    }
+    if (!calle) {
+        showNotification('⚠️ Seleccione la calle', 'warning');
+        return;
+    }
+    
+    // Validar duplicados
     var existe = Object.values(censoCache).some(function(d) { return d.cedula === cedula && !window.editKey; });
     if (existe) {
         showNotification('⚠️ Esta cédula ya está registrada. Cada persona debe tener un registro único.', 'warning');
         return;
     }
     
-    var data = {
-        cedula: cedula,
-        nombre: document.getElementById('nombreCompleto').value.trim().toUpperCase(),
-        sexo: document.getElementById('sexo').value,
-        telefono: document.getElementById('telefono').value.trim(),
-        direccion: document.getElementById('direccion').value.trim().toUpperCase(),
-        bloque: document.getElementById('censoBloque').value,
-        sector: document.getElementById('censoSector').value,
-        calle: document.getElementById('censoCalle').value.toUpperCase(),
-        encuestador: encuestador,
-        fecha: new Date().toISOString(),
-        fechaRegistro: new Date().toLocaleString(),
-        registradoPor: (currentUser && currentUser.name) || 'Desconocido'
-    };
-    
-    if (!data.cedula || !data.nombre || !data.sexo || !data.direccion || 
-        !data.bloque || !data.sector || !data.calle) {
-        showNotification('⚠️ Por favor complete todos los campos obligatorios (*)', 'warning');
-        return;
-    }
-    
-    // Validar que el encuestador solo encueste en su sector asignado
+    // Validar sector para encuestadores
     if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
-        if (data.sector !== currentUser.sector) {
+        if (sector !== currentUser.sector) {
             showNotification('⚠️ Solo puede encuestar en el sector asignado: ' + currentUser.sector, 'warning');
             return;
         }
     }
     
+    const fileInput = document.getElementById('fotoCedula');
+    let fotoUrl = null;
+    
+    if (fileInput.files && fileInput.files.length > 0) {
+        try {
+            showLoading('Subiendo foto a Cloudinary...');
+            fotoUrl = await subirImagenCloudinary(fileInput.files[0]);
+            hideLoading();
+            showNotification('✅ Foto subida correctamente', 'success', 2000);
+        } catch (error) {
+            hideLoading();
+            showNotification('❌ Error al subir la foto: ' + error.message, 'error');
+            return;
+        }
+    }
+    
+    var numeroSecuencia = asignarNumeroSecuencia(sector);
+    
+    var data = {
+        numeroSecuencia: numeroSecuencia,
+        tipoDocumento: tipoDocumento,
+        cedula: cedula,
+        nombre: nombre.toUpperCase(),
+        nacionalidad: nacionalidad,
+        sexo: sexo,
+        telefono: telefono,
+        direccion: direccion.toUpperCase(),
+        bloque: bloque,
+        sector: sector,
+        calle: calle.toUpperCase(),
+        encuestador: encuestador,
+        fotoUrl: fotoUrl,
+        fecha: new Date().toISOString(),
+        fechaRegistro: new Date().toLocaleString(),
+        registradoPor: (currentUser && currentUser.name) || 'Desconocido'
+    };
+    
     ejecutarConLoading(function() {
         var key = 'censo_' + Date.now();
-        db.ref('censo/' + key).set(data)
-            .then(function() {
-                document.getElementById('censusFormData').reset();
-                document.getElementById('censoBloque').value = '';
-                document.getElementById('censoSector').innerHTML = '<option value="">Seleccionar Sector</option>';
-                document.getElementById('censoCalle').innerHTML = '<option value="">Seleccionar Calle</option>';
-                document.getElementById('censoEncuestador').value = encuestador;
-                showNotification('✅ Encuesta guardada correctamente', 'success');
-                window.editKey = null;
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        
+        if (usandoFirebase && db) {
+            db.ref('censo/' + key).set(data)
+                .then(function() {
+                    document.getElementById('censusFormData').reset();
+                    document.getElementById('censoBloque').value = '';
+                    document.getElementById('censoSector').innerHTML = '<option value="">Seleccionar Sector</option>';
+                    document.getElementById('censoCalle').innerHTML = '<option value="">Seleccionar Calle</option>';
+                    document.getElementById('censoEncuestador').value = encuestador;
+                    document.getElementById('previewFoto').style.display = 'none';
+                    document.getElementById('nacionalidad').value = '';
+                    document.getElementById('nacionalidad').disabled = false;
+                    document.getElementById('tipoDocumento').value = '';
+                    // Si es encuestador, volver a asignar su nombre
+                    if (currentUser && currentUser.role === 'encuestador') {
+                        document.getElementById('censoEncuestador').value = currentUser.name;
+                        document.getElementById('censoEncuestador').disabled = true;
+                    }
+                    showNotification('✅ Encuesta guardada - Sector ' + sector + ' N° ' + numeroSecuencia, 'success');
+                    window.editKey = null;
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            censoCache[key] = data;
+            guardarEnLocal('censo', censoCache);
+            document.getElementById('censusFormData').reset();
+            document.getElementById('censoBloque').value = '';
+            document.getElementById('censoSector').innerHTML = '<option value="">Seleccionar Sector</option>';
+            document.getElementById('censoCalle').innerHTML = '<option value="">Seleccionar Calle</option>';
+            document.getElementById('censoEncuestador').value = encuestador;
+            document.getElementById('previewFoto').style.display = 'none';
+            document.getElementById('nacionalidad').value = '';
+            document.getElementById('nacionalidad').disabled = false;
+            document.getElementById('tipoDocumento').value = '';
+            if (currentUser && currentUser.role === 'encuestador') {
+                document.getElementById('censoEncuestador').value = currentUser.name;
+                document.getElementById('censoEncuestador').disabled = true;
+            }
+            cargarUltimasEncuestas();
+            actualizarEstadisticas();
+            showNotification('✅ Encuesta guardada (local) - Sector ' + sector + ' N° ' + numeroSecuencia, 'success');
+            window.editKey = null;
+        }
     }, 'Guardando encuesta...');
 });
 
+// ============================================================
+// FUNCIÓN PARA MOSTRAR FOTO EN LISTAS
+// ============================================================
+function mostrarFotoPersona(item) {
+    if (item && item.fotoUrl) {
+        return `<img src="${item.fotoUrl}" style="width:40px;height:40px;border-radius:4px;object-fit:cover;margin-right:10px;">`;
+    } else {
+        return `<i class="fas fa-user-circle" style="font-size:28px;color:#999;margin-right:10px;"></i>`;
+    }
+}
+
 function cargarUltimasEncuestas() {
     var container = document.getElementById('ultimasEncuestas');
+    if (!container) return;
     container.innerHTML = '';
     
     var items = Object.values(censoCache);
     
-    // Si es encuestador, solo mostrar sus encuestas
     if (currentUser && currentUser.role !== 'admin' && currentUser.name) {
         items = items.filter(function(d) { return d.encuestador === currentUser.name; });
     }
@@ -1200,13 +1817,16 @@ function cargarUltimasEncuestas() {
     var ultimas = items.slice(0, 10);
     
     ultimas.forEach(function(item) {
+        var fotoHtml = mostrarFotoPersona(item);
+        var tipoDoc = item.tipoDocumento ? item.tipoDocumento.toUpperCase() : 'CÉDULA';
         var div = document.createElement('div');
         div.className = 'list-item';
         div.innerHTML = `
             <div class="item-info">
-                <span class="name">${item.nombre}</span>
-                <span class="detail">📋 Cédula: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
-                <span class="detail">👤 Encuestador: ${item.encuestador} | 📅 ${item.fechaRegistro || new Date(item.fecha).toLocaleString()}</span>
+                <span class="name">${fotoHtml} ${item.nombre}</span>
+                <span class="detail">📋 ${tipoDoc}: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
+                <span class="detail">🌍 ${item.nacionalidad || 'N/A'} | 📞 ${item.telefono || 'N/A'}</span>
+                <span class="detail">🔢 N° Cuadernillo: ${item.numeroSecuencia || 0}</span>
             </div>
         `;
         container.appendChild(div);
@@ -1218,11 +1838,12 @@ function cargarUltimasEncuestas() {
 // ============================================================
 function cargarMisEncuestas() {
     if (!currentUser || !currentUser.name) return;
-    
     var container = document.getElementById('listaMisEncuestas');
+    if (!container) return;
     container.innerHTML = '';
     
     var items = Object.values(censoCache).filter(function(d) { return d.encuestador === currentUser.name; });
+    
     if (items.length === 0) {
         container.innerHTML = '<p style="color:var(--gray-dark);padding:10px;">No has realizado encuestas</p>';
         return;
@@ -1232,14 +1853,17 @@ function cargarMisEncuestas() {
     
     items.forEach(function(item) {
         var key = Object.keys(censoCache).find(function(k) { return censoCache[k] === item; });
+        var fotoHtml = mostrarFotoPersona(item);
+        var tipoDoc = item.tipoDocumento ? item.tipoDocumento.toUpperCase() : 'CÉDULA';
         var div = document.createElement('div');
         div.className = 'list-item';
         div.innerHTML = `
             <div class="item-info">
-                <span class="name">${item.nombre}</span>
-                <span class="detail">📋 Cédula: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
-                <span class="detail">📍 ${item.direccion} | 📞 ${item.telefono || 'N/A'}</span>
+                <span class="name">${fotoHtml} ${item.nombre}</span>
+                <span class="detail">📋 ${tipoDoc}: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
+                <span class="detail">📍 ${item.direccion} | 📞 ${item.telefono || 'N/A'} | 🌍 ${item.nacionalidad || 'N/A'}</span>
                 <span class="detail">📅 ${item.fechaRegistro || new Date(item.fecha).toLocaleString()}</span>
+                <span class="detail">🔢 N° Cuadernillo: ${item.numeroSecuencia || 0}</span>
             </div>
             <div class="item-actions">
                 <button class="btn-delete" onclick="eliminarMiEncuesta('${key}')">
@@ -1279,14 +1903,17 @@ function buscarMisEncuestas() {
     
     items.forEach(function(item) {
         var key = Object.keys(censoCache).find(function(k) { return censoCache[k] === item; });
+        var fotoHtml = mostrarFotoPersona(item);
+        var tipoDoc = item.tipoDocumento ? item.tipoDocumento.toUpperCase() : 'CÉDULA';
         var div = document.createElement('div');
         div.className = 'list-item';
         div.innerHTML = `
             <div class="item-info">
-                <span class="name">${item.nombre}</span>
-                <span class="detail">📋 Cédula: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
-                <span class="detail">📍 ${item.direccion} | 📞 ${item.telefono || 'N/A'}</span>
+                <span class="name">${fotoHtml} ${item.nombre}</span>
+                <span class="detail">📋 ${tipoDoc}: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
+                <span class="detail">📍 ${item.direccion} | 📞 ${item.telefono || 'N/A'} | 🌍 ${item.nacionalidad || 'N/A'}</span>
                 <span class="detail">📅 ${item.fechaRegistro || new Date(item.fecha).toLocaleString()}</span>
+                <span class="detail">🔢 N° Cuadernillo: ${item.numeroSecuencia || 0}</span>
             </div>
             <div class="item-actions">
                 <button class="btn-delete" onclick="eliminarMiEncuesta('${key}')">
@@ -1300,14 +1927,20 @@ function buscarMisEncuestas() {
 
 function eliminarMiEncuesta(key) {
     if (!confirm('⚠️ ¿Eliminar esta encuesta permanentemente?')) return;
-    
     ejecutarConLoading(function() {
-        db.ref('censo/' + key).remove()
-            .then(function() {
-                showNotification('✅ Encuesta eliminada correctamente', 'success');
-                cargarMisEncuestas();
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('censo/' + key).remove()
+                .then(function() {
+                    showNotification('✅ Encuesta eliminada correctamente', 'success');
+                    cargarMisEncuestas();
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            delete censoCache[key];
+            guardarEnLocal('censo', censoCache);
+            cargarMisEncuestas();
+            showNotification('✅ Encuesta eliminada (local)', 'success');
+        }
     }, 'Eliminando encuesta...');
 }
 
@@ -1327,11 +1960,12 @@ function buscarEncuestas() {
 function cargarEncuestasFiltradas() {
     var cedula = document.getElementById('buscarCedula').value.trim().toLowerCase();
     var nombre = document.getElementById('buscarNombre').value.trim().toLowerCase();
-    
     var container = document.getElementById('listaEncuestasAdmin');
+    if (!container) return;
     container.innerHTML = '';
     
     var items = Object.values(censoCache);
+    
     if (cedula || nombre) {
         items = items.filter(function(d) {
             var matchCedula = !cedula || (d.cedula && d.cedula.toLowerCase().indexOf(cedula) !== -1);
@@ -1349,14 +1983,17 @@ function cargarEncuestasFiltradas() {
     
     items.forEach(function(item) {
         var key = Object.keys(censoCache).find(function(k) { return censoCache[k] === item; });
+        var fotoHtml = mostrarFotoPersona(item);
+        var tipoDoc = item.tipoDocumento ? item.tipoDocumento.toUpperCase() : 'CÉDULA';
         var div = document.createElement('div');
         div.className = 'list-item';
         div.innerHTML = `
             <div class="item-info">
-                <span class="name">${item.nombre}</span>
-                <span class="detail">📋 Cédula: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
-                <span class="detail">📍 ${item.direccion} | 📞 ${item.telefono || 'N/A'}</span>
+                <span class="name">${fotoHtml} ${item.nombre}</span>
+                <span class="detail">📋 ${tipoDoc}: ${item.cedula} | ${item.sector}, Bloque ${item.bloque}</span>
+                <span class="detail">📍 ${item.direccion} | 📞 ${item.telefono || 'N/A'} | 🌍 ${item.nacionalidad || 'N/A'}</span>
                 <span class="detail">👤 Encuestador: ${item.encuestador} | 📅 ${item.fechaRegistro || new Date(item.fecha).toLocaleString()}</span>
+                <span class="detail">🔢 N° Cuadernillo: ${item.numeroSecuencia || 0}</span>
             </div>
             <div class="item-actions">
                 <button class="btn-edit" onclick="editarEncuesta('${key}')">
@@ -1373,14 +2010,20 @@ function cargarEncuestasFiltradas() {
 
 function eliminarEncuesta(key) {
     if (!confirm('⚠️ ¿Eliminar esta encuesta permanentemente?')) return;
-    
     ejecutarConLoading(function() {
-        db.ref('censo/' + key).remove()
-            .then(function() {
-                showNotification('✅ Encuesta eliminada correctamente', 'success');
-                cargarTodasEncuestas();
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('censo/' + key).remove()
+                .then(function() {
+                    showNotification('✅ Encuesta eliminada correctamente', 'success');
+                    cargarTodasEncuestas();
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            delete censoCache[key];
+            guardarEnLocal('censo', censoCache);
+            cargarTodasEncuestas();
+            showNotification('✅ Encuesta eliminada (local)', 'success');
+        }
     }, 'Eliminando encuesta...');
 }
 
@@ -1391,13 +2034,27 @@ function editarEncuesta(key) {
         return;
     }
     
+    document.getElementById('tipoDocumento').value = data.tipoDocumento || '';
     document.getElementById('cedula').value = data.cedula || '';
     document.getElementById('nombreCompleto').value = data.nombre || '';
+    document.getElementById('nacionalidad').value = data.nacionalidad || '';
     document.getElementById('sexo').value = data.sexo || '';
     document.getElementById('telefono').value = data.telefono || '';
     document.getElementById('direccion').value = data.direccion || '';
     document.getElementById('censoBloque').value = data.bloque || '';
     document.getElementById('censoEncuestador').value = data.encuestador || (currentUser && currentUser.name) || '';
+    
+    if (data.fotoUrl) {
+        document.getElementById('previewImg').src = data.fotoUrl;
+        document.getElementById('previewFoto').style.display = 'block';
+    }
+    
+    if (data.tipoDocumento === 'cedula') {
+        document.getElementById('nacionalidad').value = 'dominicana';
+        document.getElementById('nacionalidad').disabled = true;
+    } else {
+        document.getElementById('nacionalidad').disabled = false;
+    }
     
     setTimeout(function() {
         if (data.bloque) {
@@ -1415,7 +2072,6 @@ function editarEncuesta(key) {
     }, 300);
     
     window.editKey = key;
-    
     var submitBtn = document.querySelector('#censusFormData button[type="submit"]');
     submitBtn.innerHTML = '<i class="fas fa-save"></i> Actualizar Encuesta';
     submitBtn.onclick = function(e) {
@@ -1428,6 +2084,7 @@ function editarEncuesta(key) {
 }
 
 function actualizarEncuesta(key) {
+    var dataOriginal = censoCache[key];
     var cedula = document.getElementById('cedula').value.trim();
     
     var duplicado = Object.values(censoCache).some(function(d) {
@@ -1439,8 +2096,11 @@ function actualizarEncuesta(key) {
     }
     
     var data = {
+        numeroSecuencia: dataOriginal.numeroSecuencia || 0,
+        tipoDocumento: document.getElementById('tipoDocumento').value,
         cedula: cedula,
         nombre: document.getElementById('nombreCompleto').value.trim().toUpperCase(),
+        nacionalidad: document.getElementById('nacionalidad').value,
         sexo: document.getElementById('sexo').value,
         telefono: document.getElementById('telefono').value.trim(),
         direccion: document.getElementById('direccion').value.trim().toUpperCase(),
@@ -1448,6 +2108,7 @@ function actualizarEncuesta(key) {
         sector: document.getElementById('censoSector').value,
         calle: document.getElementById('censoCalle').value.toUpperCase(),
         encuestador: document.getElementById('censoEncuestador').value || (currentUser && currentUser.name) || 'Desconocido',
+        fotoUrl: dataOriginal.fotoUrl || null,
         fecha: new Date().toISOString(),
         fechaRegistro: new Date().toLocaleString(),
         registradoPor: (currentUser && currentUser.name) || 'Desconocido',
@@ -1456,69 +2117,58 @@ function actualizarEncuesta(key) {
         fechaEdicion: new Date().toLocaleString()
     };
     
-    if (!data.cedula || !data.nombre || !data.sexo || !data.direccion || 
-        !data.bloque || !data.sector || !data.calle) {
+    if (!data.tipoDocumento || !data.cedula || !data.nombre || !data.nacionalidad || !data.sexo || 
+        !data.direccion || !data.bloque || !data.sector || !data.calle) {
         showNotification('⚠️ Por favor complete todos los campos obligatorios (*)', 'warning');
         return;
     }
     
     ejecutarConLoading(function() {
-        db.ref('censo/' + key).update(data)
-            .then(function() {
-                var submitBtn = document.querySelector('#censusFormData button[type="submit"]');
-                submitBtn.innerHTML = '<i class="fas fa-check-circle"></i> Guardar Encuesta';
-                submitBtn.onclick = function(e) {
-                    e.preventDefault();
-                    document.getElementById('censusFormData').dispatchEvent(new Event('submit'));
-                };
-                
-                document.getElementById('censusFormData').reset();
-                document.getElementById('censoBloque').value = '';
-                document.getElementById('censoSector').innerHTML = '<option value="">Seleccionar Sector</option>';
-                document.getElementById('censoCalle').innerHTML = '<option value="">Seleccionar Calle</option>';
-                document.getElementById('censoEncuestador').value = (currentUser && currentUser.name) || '';
-                showNotification('✅ Encuesta actualizada correctamente', 'success');
-                window.editKey = null;
-            })
-            .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        if (usandoFirebase && db) {
+            db.ref('censo/' + key).update(data)
+                .then(function() {
+                    resetFormularioEncuesta();
+                    showNotification('✅ Encuesta actualizada correctamente', 'success');
+                    window.editKey = null;
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            censoCache[key] = data;
+            guardarEnLocal('censo', censoCache);
+            resetFormularioEncuesta();
+            showNotification('✅ Encuesta actualizada (local)', 'success');
+            window.editKey = null;
+        }
     }, 'Actualizando encuesta...');
 }
 
-// ============================================================
-// ESTADÍSTICAS - FILTRADAS POR SECTOR PARA ENCUESTADORES
-// ============================================================
-function actualizarEstadisticas() {
-    var totalCensados = Object.keys(censoCache).length;
-    var totalMisCensados = 0;
-    
-    // Si es encuestador, filtrar por su sector
-    if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
-        var items = Object.values(censoCache).filter(function(d) { return d.sector === currentUser.sector; });
-        totalCensados = items.length;
-        // Mis encuestas
-        var misItems = Object.values(censoCache).filter(function(d) { return d.encuestador === currentUser.name; });
-        totalMisCensados = misItems.length;
-    } else if (currentUser && currentUser.role !== 'admin' && currentUser.name) {
-        // Encuestador sin sector asignado
-        var misItems2 = Object.values(censoCache).filter(function(d) { return d.encuestador === currentUser.name; });
-        totalMisCensados = misItems2.length;
+function resetFormularioEncuesta() {
+    var submitBtn = document.querySelector('#censusFormData button[type="submit"]');
+    submitBtn.innerHTML = '<i class="fas fa-check-circle"></i> Guardar Encuesta';
+    submitBtn.onclick = function(e) {
+        e.preventDefault();
+        document.getElementById('censusFormData').dispatchEvent(new Event('submit'));
+    };
+    document.getElementById('censusFormData').reset();
+    document.getElementById('censoBloque').value = '';
+    document.getElementById('censoSector').innerHTML = '<option value="">Seleccionar Sector</option>';
+    document.getElementById('censoCalle').innerHTML = '<option value="">Seleccionar Calle</option>';
+    document.getElementById('censoEncuestador').value = (currentUser && currentUser.name) || '';
+    document.getElementById('previewFoto').style.display = 'none';
+    document.getElementById('nacionalidad').value = '';
+    document.getElementById('nacionalidad').disabled = false;
+    document.getElementById('tipoDocumento').value = '';
+    if (currentUser && currentUser.role === 'encuestador') {
+        document.getElementById('censoEncuestador').value = currentUser.name;
+        document.getElementById('censoEncuestador').disabled = true;
     }
-    
-    document.getElementById('totalCensados').textContent = totalCensados;
-    document.getElementById('totalMisCensados').textContent = totalMisCensados;
-    document.getElementById('totalBloques').textContent = Object.keys(bloquesCache).length;
-    document.getElementById('totalCalles').textContent = Object.keys(callesCache).length;
-    document.getElementById('totalEncuestadores').textContent = Object.keys(encuestadoresCache).length;
 }
 
 // ============================================================
-// FILTROS DEL DASHBOARD - SOLO PARA ADMIN
+// VOTACIÓN - CON BÚSQUEDA POR CÉDULA, NOMBRE Y N° CUADERNILLO
 // ============================================================
-function cargarFiltrosDashboard() {
-    var selectBloque = document.getElementById('filtroBloque');
-    var selectSector = document.getElementById('filtroSector');
-    var selectEncuestador = document.getElementById('filtroEncuestador');
-    
+function cargarBloquesVotacion() {
+    var selectBloque = document.getElementById('votacionBloque');
     if (!selectBloque) return;
     
     var ordenRomanos = ['I','II','III','IV','V','VI','VII','VIII','IX','X'];
@@ -1526,7 +2176,7 @@ function cargarFiltrosDashboard() {
         return ordenRomanos.indexOf(a) - ordenRomanos.indexOf(b);
     });
     
-    selectBloque.innerHTML = '<option value="">Todos</option>';
+    selectBloque.innerHTML = '<option value="">Seleccionar</option>';
     bloques.forEach(function(bloque) {
         var opt = document.createElement('option');
         opt.value = bloque;
@@ -1534,54 +2184,327 @@ function cargarFiltrosDashboard() {
         selectBloque.appendChild(opt);
     });
     
-    selectSector.innerHTML = '<option value="">Todos</option>';
-    Object.keys(bloquesCache).forEach(function(bloque) {
-        var sectores = bloquesCache[bloque] || [];
-        sectores.forEach(function(s) {
+    selectBloque.onchange = function() {
+        cargarSectoresVotacion(this.value);
+    };
+}
+
+function cargarSectoresVotacion(bloque) {
+    var selectSector = document.getElementById('votacionSector');
+    if (!selectSector) return;
+    
+    selectSector.innerHTML = '<option value="">Seleccionar</option>';
+    if (bloque && bloquesCache[bloque]) {
+        bloquesCache[bloque].forEach(function(s) {
             var opt = document.createElement('option');
             opt.value = s.sector;
             opt.textContent = s.sector;
             selectSector.appendChild(opt);
         });
+    }
+}
+
+function iniciarEleccion() {
+    var fecha = document.getElementById('fechaEleccion').value;
+    var bloque = document.getElementById('votacionBloque').value;
+    var sector = document.getElementById('votacionSector').value;
+    
+    if (!fecha || !bloque || !sector) {
+        showNotification('⚠️ Complete todos los campos para iniciar la jornada', 'warning');
+        return;
+    }
+    
+    eleccionActiva = true;
+    window.eleccionData = {
+        fecha: fecha,
+        bloque: bloque,
+        sector: sector
+    };
+    showNotification('✅ Jornada electoral iniciada para ' + sector + ' (Bloque ' + bloque + ')', 'success');
+}
+
+function buscarParaVotar() {
+    if (!eleccionActiva) {
+        showNotification('⚠️ Primero inicie la jornada electoral', 'warning');
+        return;
+    }
+    
+    var busqueda = document.getElementById('votacionBusqueda').value.trim();
+    
+    if (!busqueda) {
+        showNotification('⚠️ Ingrese un término de búsqueda (cédula, nombre o N° cuadernillo)', 'warning');
+        return;
+    }
+    
+    var busquedaLower = busqueda.toLowerCase();
+    var persona = null;
+    var personaKey = null;
+    var tipoBusqueda = '';
+    
+    var esNumero = /^\d+$/.test(busqueda);
+    
+    Object.keys(censoCache).forEach(function(key) {
+        var d = censoCache[key];
+        var match = false;
+        
+        if (esNumero && d.numeroSecuencia && parseInt(d.numeroSecuencia) === parseInt(busqueda)) {
+            match = true;
+            tipoBusqueda = 'N° Cuadernillo';
+        }
+        
+        if (!match && d.cedula) {
+            var cedulaLimpia = limpiarCedula(d.cedula);
+            var busquedaLimpia = limpiarCedula(busqueda);
+            if (cedulaLimpia === busquedaLimpia) {
+                match = true;
+                tipoBusqueda = 'Cédula';
+            }
+        }
+        
+        if (!match && d.nombre && d.nombre.toLowerCase().indexOf(busquedaLower) !== -1) {
+            match = true;
+            tipoBusqueda = 'Nombre';
+        }
+        
+        if (match) {
+            persona = d;
+            personaKey = key;
+        }
     });
     
-    selectEncuestador.innerHTML = '<option value="">Todos</option>';
-    Object.values(encuestadoresCache).forEach(function(data) {
-        var opt = document.createElement('option');
-        opt.value = data.nombre;
-        opt.textContent = data.nombre;
-        selectEncuestador.appendChild(opt);
+    if (!persona) {
+        showNotification('❌ No se encontró a esta persona en el censo', 'error');
+        document.getElementById('votacionResultado').style.display = 'none';
+        return;
+    }
+    
+    if (persona.sector !== window.eleccionData.sector) {
+        showNotification('⚠️ Esta persona pertenece al sector ' + persona.sector + ', no a ' + window.eleccionData.sector, 'warning');
+        document.getElementById('votacionResultado').style.display = 'none';
+        return;
+    }
+    
+    var yaVoto = Object.values(votantesCache).some(function(v) {
+        return v.cedula === persona.cedula && v.fecha === window.eleccionData.fecha;
+    });
+    
+    if (yaVoto) {
+        showNotification('⚠️ Esta persona YA VOTÓ en esta jornada electoral', 'warning');
+        document.getElementById('votacionResultado').style.display = 'none';
+        return;
+    }
+    
+    var tipoDoc = persona.tipoDocumento ? persona.tipoDocumento.toUpperCase() : 'CÉDULA';
+    
+    document.getElementById('votanteFoto').src = persona.fotoUrl || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Crect width=%22100%22 height=%22100%22 fill=%22%23eee%22/%3E%3Ctext x=%2250%22 y=%2250%22 font-size=%2210%22 text-anchor=%22middle%22 dy=%22.3em%22%3ESin Foto%3C/text%3E%3C/svg%3E';
+    document.getElementById('votanteNombre').textContent = persona.nombre || 'Sin nombre';
+    document.getElementById('votanteTipoDoc').textContent = tipoDoc;
+    document.getElementById('votanteCedula').textContent = persona.cedula || 'N/A';
+    document.getElementById('votanteNacionalidad').textContent = persona.nacionalidad || 'N/A';
+    document.getElementById('votanteDireccion').textContent = persona.direccion || 'N/A';
+    document.getElementById('votanteTelefono').textContent = persona.telefono || 'N/A';
+    document.getElementById('votanteSector').textContent = persona.sector || 'N/A';
+    document.getElementById('votanteBloque').textContent = persona.bloque || 'N/A';
+    document.getElementById('votanteCalle').textContent = persona.calle || 'N/A';
+    document.getElementById('votanteNumeroSecuencia').textContent = persona.numeroSecuencia || 'N/A';
+    document.getElementById('votanteEstado').textContent = '✅ Habilitado para votar';
+    document.getElementById('votanteEstado').style.color = 'var(--success)';
+    
+    window.personaParaVotar = {
+        key: personaKey,
+        data: persona
+    };
+    
+    document.getElementById('votacionResultado').style.display = 'block';
+    showNotification('✅ Persona encontrada por ' + tipoBusqueda, 'success', 2000);
+}
+
+function registrarVoto() {
+    if (!window.personaParaVotar) {
+        showNotification('⚠️ No hay persona seleccionada', 'warning');
+        return;
+    }
+    
+    if (!eleccionActiva) {
+        showNotification('⚠️ La jornada electoral no está activa', 'warning');
+        return;
+    }
+    
+    var persona = window.personaParaVotar.data;
+    var key = 'votante_' + Date.now();
+    var data = {
+        cedula: persona.cedula,
+        nombre: persona.nombre,
+        tipoDocumento: persona.tipoDocumento || '',
+        nacionalidad: persona.nacionalidad || '',
+        direccion: persona.direccion || '',
+        telefono: persona.telefono || '',
+        sector: persona.sector,
+        bloque: persona.bloque,
+        calle: persona.calle,
+        numeroSecuencia: persona.numeroSecuencia || 0,
+        fotoUrl: persona.fotoUrl || null,
+        fecha: window.eleccionData.fecha,
+        fechaRegistro: new Date().toLocaleString(),
+        registradoPor: (currentUser && currentUser.name) || 'Desconocido',
+        eleccion: window.eleccionData
+    };
+    
+    ejecutarConLoading(function() {
+        if (usandoFirebase && db) {
+            db.ref('votantes/' + key).set(data)
+                .then(function() {
+                    showNotification('✅ Voto registrado correctamente para ' + persona.nombre, 'success');
+                    document.getElementById('votacionResultado').style.display = 'none';
+                    document.getElementById('votacionBusqueda').value = '';
+                    window.personaParaVotar = null;
+                    cargarVotantesHoy();
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            votantesCache[key] = data;
+            guardarEnLocal('votantes', votantesCache);
+            showNotification('✅ Voto registrado (local) para ' + persona.nombre, 'success');
+            document.getElementById('votacionResultado').style.display = 'none';
+            document.getElementById('votacionBusqueda').value = '';
+            window.personaParaVotar = null;
+            cargarVotantesHoy();
+        }
+    }, 'Registrando voto...');
+}
+
+function cargarVotantesHoy() {
+    var container = document.getElementById('listaVotantesHoy');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    var items = Object.values(votantesCache);
+    
+    if (eleccionActiva && window.eleccionData) {
+        items = items.filter(function(v) { return v.fecha === window.eleccionData.fecha; });
+    }
+    
+    if (items.length === 0) {
+        container.innerHTML = '<p style="color:var(--gray-dark);padding:10px;">No hay votantes registrados en esta jornada</p>';
+        return;
+    }
+    
+    items.sort(function(a, b) { return (a.nombre || '').localeCompare(b.nombre || ''); });
+    
+    items.forEach(function(item) {
+        var fotoHtml = item.fotoUrl ? 
+            `<img src="${item.fotoUrl}" style="width:30px;height:30px;border-radius:4px;object-fit:cover;margin-right:8px;">` :
+            `<i class="fas fa-user-circle" style="font-size:20px;color:#999;margin-right:8px;"></i>`;
+        var tipoDoc = item.tipoDocumento ? item.tipoDocumento.toUpperCase() : 'CÉDULA';
+        var div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `
+            <div class="item-info">
+                <span class="name">${fotoHtml} ${item.nombre || 'Sin nombre'}</span>
+                <span class="detail">📋 ${tipoDoc}: ${item.cedula || 'N/A'} | ${item.sector || 'N/A'}</span>
+                <span class="detail">🔢 N° Cuadernillo: ${item.numeroSecuencia || 'N/A'} | 🌍 ${item.nacionalidad || 'N/A'}</span>
+                <span class="detail">⏰ ${item.fechaRegistro || 'N/A'}</span>
+            </div>
+        `;
+        container.appendChild(div);
     });
 }
 
-function aplicarFiltrosDashboard() {
-    var bloque = document.getElementById('filtroBloque').value;
-    var sector = document.getElementById('filtroSector').value;
-    var encuestador = document.getElementById('filtroEncuestador').value;
+function cargarVotantesAdmin() {
+    var container = document.getElementById('listaVotantesAdmin');
+    if (!container) return;
+    container.innerHTML = '';
     
-    var items = Object.values(censoCache);
+    var items = Object.values(votantesCache);
     
-    if (bloque) {
-        items = items.filter(function(d) { return d.bloque === bloque; });
-    }
-    if (sector) {
-        items = items.filter(function(d) { return d.sector === sector; });
-    }
-    if (encuestador) {
-        items = items.filter(function(d) { return d.encuestador === encuestador; });
+    if (items.length === 0) {
+        container.innerHTML = '<p style="color:var(--gray-dark);padding:10px;">No hay votantes registrados</p>';
+        return;
     }
     
-    document.getElementById('totalCensados').textContent = items.length;
+    items.sort(function(a, b) { return new Date(b.fechaRegistro) - new Date(a.fechaRegistro); });
+    
+    items.forEach(function(item) {
+        var fotoHtml = item.fotoUrl ? 
+            `<img src="${item.fotoUrl}" style="width:30px;height:30px;border-radius:4px;object-fit:cover;margin-right:8px;">` :
+            `<i class="fas fa-user-circle" style="font-size:20px;color:#999;margin-right:8px;"></i>`;
+        var tipoDoc = item.tipoDocumento ? item.tipoDocumento.toUpperCase() : 'CÉDULA';
+        var div = document.createElement('div');
+        div.className = 'list-item';
+        div.innerHTML = `
+            <div class="item-info">
+                <span class="name">${fotoHtml} ${item.nombre || 'Sin nombre'}</span>
+                <span class="detail">📋 ${tipoDoc}: ${item.cedula || 'N/A'} | ${item.sector || 'N/A'} | Bloque ${item.bloque || 'N/A'}</span>
+                <span class="detail">🔢 N° Cuadernillo: ${item.numeroSecuencia || 'N/A'} | 🌍 ${item.nacionalidad || 'N/A'}</span>
+                <span class="detail">📅 Elección: ${item.fecha || 'N/A'} | Registrado: ${item.fechaRegistro || 'N/A'}</span>
+            </div>
+            <div class="item-actions">
+                <button class="btn-delete" onclick="eliminarVotante('${Object.keys(votantesCache).find(function(k) { return votantesCache[k] === item; })}')">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function eliminarVotante(key) {
+    if (!confirm('⚠️ ¿Eliminar este registro de votante?')) return;
+    ejecutarConLoading(function() {
+        if (usandoFirebase && db) {
+            db.ref('votantes/' + key).remove()
+                .then(function() {
+                    showNotification('✅ Votante eliminado correctamente', 'success');
+                    cargarVotantesAdmin();
+                })
+                .catch(function(error) { showNotification('❌ Error: ' + error.message, 'error'); });
+        } else {
+            delete votantesCache[key];
+            guardarEnLocal('votantes', votantesCache);
+            cargarVotantesAdmin();
+            showNotification('✅ Votante eliminado (local)', 'success');
+        }
+    }, 'Eliminando votante...');
 }
 
 // ============================================================
-// REPORTES
+// ESTADÍSTICAS - ACTUALIZADO PARA ENCUESTADORES
+// ============================================================
+function actualizarEstadisticas() {
+    var totalCensados = Object.keys(censoCache).length;
+    var totalMisCensados = 0;
+    var totalVotantes = Object.keys(votantesCache).length;
+    var totalBloques = Object.keys(bloquesCache).length;
+    
+    // Si es encuestador, solo mostrar sus estadísticas
+    if (currentUser && currentUser.role !== 'admin' && currentUser.name) {
+        var misItems = Object.values(censoCache).filter(function(d) { return d.encuestador === currentUser.name; });
+        totalMisCensados = misItems.length;
+        // Si tiene sector asignado, filtrar también por sector
+        if (currentUser.sector) {
+            var itemsSector = Object.values(censoCache).filter(function(d) { return d.sector === currentUser.sector; });
+            totalCensados = itemsSector.length;
+        } else {
+            totalCensados = misItems.length;
+        }
+        // Ocultar votantes y bloques para encuestadores
+        totalVotantes = 0;
+        totalBloques = 0;
+    }
+    
+    document.getElementById('totalCensados').textContent = totalCensados;
+    document.getElementById('totalMisCensados').textContent = totalMisCensados;
+    document.getElementById('totalVotantes').textContent = totalVotantes;
+    document.getElementById('totalBloques').textContent = totalBloques;
+}
+
+// ============================================================
+// REPORTES - CUADERNILLO CON TODOS LOS DATOS
 // ============================================================
 document.getElementById('reportType').addEventListener('change', function() {
     var tipo = this.value;
     document.getElementById('reportBloqueGroup').style.display = tipo === 'bloque' ? 'block' : 'none';
     document.getElementById('reportSectorGroup').style.display = tipo === 'sector' ? 'block' : 'none';
-    
     if (tipo === 'bloque' || tipo === 'sector') {
         cargarSelectoresReporte();
     }
@@ -1590,7 +2513,6 @@ document.getElementById('reportType').addEventListener('change', function() {
 function cargarSelectoresReporte() {
     var selectBloque = document.getElementById('reportBloque');
     var selectSector = document.getElementById('reportSector');
-    
     if (!selectBloque) return;
     
     var ordenRomanos = ['I','II','III','IV','V','VI','VII','VIII','IX','X'];
@@ -1622,7 +2544,6 @@ document.getElementById('reportBloque').addEventListener('change', function() {
     var bloque = this.value;
     var sectorSelect = document.getElementById('reportSector');
     sectorSelect.innerHTML = '<option value="">Seleccionar</option>';
-    
     if (bloque && bloquesCache[bloque]) {
         bloquesCache[bloque].forEach(function(s) {
             var opt = document.createElement('option');
@@ -1644,7 +2565,10 @@ function getColumnasSeleccionadas() {
     return columnas;
 }
 
-function generarReporte(tipo) {
+// ============================================================
+// GENERAR CUADERNILLO PDF - COMPLETO
+// ============================================================
+function generarCuadernillo(conMarcaDeAgua) {
     var columnas = getColumnasSeleccionadas();
     if (columnas.length === 0) {
         showNotification('⚠️ Seleccione al menos una columna para el reporte', 'warning');
@@ -1654,12 +2578,10 @@ function generarReporte(tipo) {
     var datos = Object.values(censoCache);
     var titulo = 'Todos los Sectores';
     
-    // Si es encuestador, filtrar por su sector
     if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
         datos = datos.filter(function(d) { return d.sector === currentUser.sector; });
         titulo = 'Sector: ' + currentUser.sector;
     } else {
-        // Solo admin puede usar filtros
         var reportType = document.getElementById('reportType').value;
         if (reportType === 'bloque') {
             var bloque = document.getElementById('reportBloque').value;
@@ -1673,10 +2595,8 @@ function generarReporte(tipo) {
             titulo = 'Sector: ' + sector;
         }
         
-        // Filtro por fecha (solo admin)
         var fechaDesde = document.getElementById('reportFechaDesde').value;
         var fechaHasta = document.getElementById('reportFechaHasta').value;
-        
         if (fechaDesde) {
             var desde = new Date(fechaDesde).getTime();
             datos = datos.filter(function(d) { return new Date(d.fecha).getTime() >= desde; });
@@ -1686,10 +2606,8 @@ function generarReporte(tipo) {
             datos = datos.filter(function(d) { return new Date(d.fecha).getTime() <= hasta; });
         }
         
-        // Ordenamiento (solo admin)
         var orderBy = document.getElementById('reportOrderBy').value;
         var orderDir = document.getElementById('reportOrderDir').value;
-        
         datos.sort(function(a, b) {
             var valA = a[orderBy] || '';
             var valB = b[orderBy] || '';
@@ -1708,100 +2626,105 @@ function generarReporte(tipo) {
         return;
     }
     
-    mostrarVistaPrevia(datos, titulo, columnas);
-    
-    if (tipo === 'excel') {
-        exportarExcel(datos, titulo, columnas);
-    } else {
-        exportarPDF(datos, titulo, columnas);
-    }
+    marcaDeAguaActiva = conMarcaDeAgua;
+    mostrarVistaPreviaCuadernillo(datos, titulo, columnas);
+    exportarCuadernilloPDF(datos, titulo, columnas, conMarcaDeAgua);
 }
 
-// ============================================================
-// VISTA PREVIA
-// ============================================================
-function mostrarVistaPrevia(datos, titulo, columnas) {
+function mostrarVistaPreviaCuadernillo(datos, titulo, columnas) {
     var container = document.getElementById('reportPreview');
+    if (!container) return;
+    
     var headersMap = {
         no: 'No.',
+        tipoDocumento: 'Tipo Doc.',
         cedula: 'Cédula',
         nombre: 'Nombre',
+        nacionalidad: 'Nacionalidad',
         sexo: 'Sexo',
         telefono: 'Teléfono',
         direccion: 'Dirección',
-        bloque: 'Bloque',
         sector: 'Sector',
+        bloque: 'Bloque',
         calle: 'Calle',
-        encuestador: 'Encuestador',
-        fecha: 'Fecha',
-        registradoPor: 'Registrado por'
+        foto: '📸 Foto',
+        firma: 'FIRMA'
     };
     
     var html = `
         <div class="preview-container">
             <div class="preview-header">
-                <h3>JUNTA MUNICIPAL SAN LUIS</h3>
-                <div class="rnc">RNC: 4-30-017809</div>
-                <div class="ubicacion">MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO</div>
-                <div class="depto">DEPARTAMENTO DE ASUNTOS COMUNITARIOS</div>
-                <div class="preview-title">REPORTE DE CENSO ELECTORAL</div>
+                <h3 style="font-size:1.1rem;">JUNTA MUNICIPAL SAN LUIS</h3>
+                <div style="font-size:0.75rem;">RNC: 4-30-017809</div>
+                <div style="font-size:0.75rem;">MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO</div>
+                <div style="font-size:0.75rem;">DEPARTAMENTO DE ASUNTOS COMUNITARIOS</div>
+                <div class="preview-title" style="font-size:0.95rem;font-weight:bold;color:#B8860B;">REPORTE DE CENSO ELECTORAL - CUADERNILLO</div>
+                ${marcaDeAguaActiva ? '<div style="color:#B8860B;font-weight:bold;font-size:0.85rem;">🔷 CON MARCA DE AGUA</div>' : ''}
             </div>
-            <div class="preview-info">
+            <div class="preview-info" style="font-size:0.8rem;">
                 <span><strong>Reporte:</strong> ${titulo}</span>
                 <span><strong>Total:</strong> ${datos.length} registros</span>
                 <span><strong>Fecha:</strong> ${new Date().toLocaleDateString()}</span>
-                ${document.getElementById('reportFechaDesde').value ? '<span><strong>Desde:</strong> ' + document.getElementById('reportFechaDesde').value + '</span>' : ''}
-                ${document.getElementById('reportFechaHasta').value ? '<span><strong>Hasta:</strong> ' + document.getElementById('reportFechaHasta').value + '</span>' : ''}
-                <span><strong>Orden:</strong> ${document.getElementById('reportOrderBy').value} (${document.getElementById('reportOrderDir').value})</span>
             </div>
             <div class="preview-table-wrapper">
-                <table class="preview-table">
+                <table class="preview-table" style="width:100%;border-collapse:collapse;font-size:0.7rem;">
                     <thead>
                         <tr>
-                            <th class="centered">No.</th>
+                            <th style="width:3%;font-size:0.6rem;">No.</th>
+                            <th style="width:12%;font-size:0.6rem;">📸 Foto</th>
     `;
     
     columnas.forEach(function(col) {
-        html += '<th>' + (headersMap[col] || col) + '</th>';
+        if (col !== 'foto') {
+            var ancho = col === 'nombre' ? '14%' : (col === 'direccion' ? '14%' : '9%');
+            html += '<th style="width:' + ancho + ';font-size:0.6rem;">' + (headersMap[col] || col) + '</th>';
+        }
     });
+    
+    html += '<th style="width:10%;text-align:center;font-size:0.6rem;">FIRMA</th>';
     html += '</tr></thead><tbody>';
     
-    var limit = Math.min(datos.length, 50);
+    var limit = Math.min(datos.length, 10);
     for (var i = 0; i < limit; i++) {
         var d = datos[i];
-        html += '<tr>';
-        html += '<td class="numero">' + (i + 1) + '</td>';
+        var tipoDoc = d.tipoDocumento ? d.tipoDocumento.toUpperCase() : 'CÉDULA';
+        html += '<tr style="border-bottom:1px solid #eee;">';
+        html += '<td style="text-align:center;padding:6px;font-size:0.65rem;">' + (i + 1) + '</td>';
+        html += '<td style="text-align:center;padding:6px;">' + (d.fotoUrl ? `<img src="${d.fotoUrl}" style="width:50px;height:50px;border-radius:4px;object-fit:cover;border:1px solid #ccc;">` : '📷') + '</td>';
         columnas.forEach(function(col) {
-            var valor = d[col] || '';
-            if (col === 'fecha') {
-                valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
-            } else if (col !== 'cedula' && col !== 'telefono') {
-                valor = valor.toUpperCase();
+            if (col !== 'foto') {
+                var valor = d[col] || '';
+                if (col === 'tipoDocumento') {
+                    valor = tipoDoc;
+                } else if (col !== 'cedula' && col !== 'telefono') {
+                    valor = valor.toUpperCase();
+                }
+                html += '<td style="padding:6px;font-size:0.65rem;">' + valor + '</td>';
             }
-            html += '<td>' + valor + '</td>';
         });
+        html += '<td style="text-align:center;padding:6px;"><div style="border-bottom:2px solid #333;height:20px;margin:0 auto;width:80%;"></div></td>';
         html += '</tr>';
     }
     
-    if (datos.length > 50) {
-        html += '<tr><td colspan="' + (columnas.length + 1) + '" style="text-align:center;color:var(--gray-dark);padding:10px;">';
-        html += '... y ' + (datos.length - 50) + ' registros más';
+    if (datos.length > 10) {
+        html += '<tr><td colspan="' + (columnas.length + 2) + '" style="text-align:center;color:var(--gray-dark);padding:10px;font-size:0.7rem;">';
+        html += '... y ' + (datos.length - 10) + ' registros más';
         html += '</td></tr>';
     }
     
     html += `
                 </tbody></table>
             </div>
-            <div class="preview-footer">
-                <div class="firma-info">
-                    <strong>Francisco Lorenzo</strong>
-                    <div class="firma-line"></div>
-                    <span class="firma-cargo">DIRECTOR</span>
+            <div style="display:flex;justify-content:space-around;margin-top:20px;padding-top:15px;border-top:2px solid #B8860B;">
+                <div style="text-align:center;">
+                    <div style="border-bottom:1px solid #000;height:30px;width:150px;margin:0 auto;"></div>
+                    <strong style="font-size:0.85rem;">Francisco Lorenzo</strong>
+                    <div style="font-size:0.7rem;color:#6b7a8f;">DIRECTOR</div>
                 </div>
-                <div class="firma-info">
-                    <strong>Domingo Carsado</strong>
-                    <div class="firma-line"></div>
-                    <span class="firma-cargo">ENCARGADO</span>
+                <div style="text-align:center;">
+                    <div style="border-bottom:1px solid #000;height:30px;width:150px;margin:0 auto;"></div>
+                    <strong style="font-size:0.85rem;">Domingo Carsado</strong>
+                    <div style="font-size:0.7rem;color:#6b7a8f;">ENCARGADO</div>
                 </div>
             </div>
         </div>
@@ -1809,317 +2732,271 @@ function mostrarVistaPrevia(datos, titulo, columnas) {
     container.innerHTML = html;
 }
 
-// ============================================================
-// EXPORTAR EXCEL
-// ============================================================
-function exportarExcel(datos, titulo, columnas) {
-    var headersMap = {
-        cedula: 'Cédula',
-        nombre: 'Nombre',
-        sexo: 'Sexo',
-        telefono: 'Teléfono',
-        direccion: 'Dirección',
-        bloque: 'Bloque',
-        sector: 'Sector',
-        calle: 'Calle',
-        encuestador: 'Encuestador',
-        fecha: 'Fecha',
-        registradoPor: 'Registrado por'
-    };
-    
-    var headers = ['No.'];
-    columnas.forEach(function(col) {
-        headers.push(headersMap[col] || col);
-    });
-    var rows = [headers];
-    
-    datos.forEach(function(d, index) {
-        var row = [index + 1];
-        columnas.forEach(function(col) {
-            var valor = d[col] || '';
-            if (col === 'fecha') {
-                valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
-            } else if (col !== 'cedula' && col !== 'telefono') {
-                valor = valor.toUpperCase();
-            }
-            row.push(valor);
-        });
-        rows.push(row);
-    });
-    
-    var csvContent = rows.map(function(row) { return row.join(','); }).join('\n');
-    var blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8' });
-    var link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'Censo_JMSL_' + titulo.replace(/\s/g, '_') + '_' + new Date().toISOString().slice(0,10) + '.csv';
-    link.click();
-    URL.revokeObjectURL(link.href);
-    showNotification('✅ Reporte Excel generado correctamente', 'success');
-}
-
-// ============================================================
-// EXPORTAR PDF - CORREGIDO
-// ============================================================
-function exportarPDF(datos, titulo, columnas) {
+function exportarCuadernilloPDF(datos, titulo, columnas, conMarcaDeAgua) {
     try {
         if (typeof window.jspdf === 'undefined') {
             showNotification('❌ La librería jspdf no está cargada correctamente', 'error');
             return;
         }
-        
         var jsPDF = window.jspdf.jsPDF;
         if (!jsPDF) {
             showNotification('❌ Error al cargar la librería PDF', 'error');
             return;
         }
         
-        var doc = new jsPDF('landscape', 'mm', 'letter');
+        var doc = new jsPDF('p', 'mm', 'letter');
         var pageWidth = doc.internal.pageSize.getWidth();
         var pageHeight = doc.internal.pageSize.getHeight();
-        var margin = 10;
-        var pageCount = 1;
+        var margin = 6;
+        var pageNumber = 1;
         
-        var headersMap = {
-            cedula: 'CÉDULA',
-            nombre: 'NOMBRE',
-            sexo: 'SEXO',
-            telefono: 'TELÉFONO',
-            direccion: 'DIRECCIÓN',
-            bloque: 'BLOQUE',
-            sector: 'SECTOR',
-            calle: 'CALLE',
-            encuestador: 'ENCUESTADOR',
-            fecha: 'FECHA',
-            registradoPor: 'REGISTRADO POR'
-        };
+        var columnGap = 2;
+        var columnWidth = ((pageWidth - (margin * 2) - columnGap) / 2);
+        var leftColumnX = margin;
+        var rightColumnX = margin + columnWidth + columnGap;
+        var recordHeight = 32;
+        var photoWidth = 18;
+        var photoHeight = 24;
         
-        var headers = ['No.'];
-        columnas.forEach(function(col) {
-            headers.push(headersMap[col] || col.toUpperCase());
-        });
+        var columnasFiltradas = columnas.filter(function(c) { return c !== 'foto'; });
+        var mostrarFoto = columnas.indexOf('foto') !== -1;
         
-        var colWidths = {
-            no: 12,
-            cedula: 28,
-            nombre: 38,
-            sexo: 20,
-            telefono: 24,
-            direccion: 42,
-            bloque: 16,
-            sector: 28,
-            calle: 30,
-            encuestador: 32,
-            fecha: 28,
-            registradoPor: 28
-        };
-        
-        var colWidthsArray = [];
-        headers.forEach(function(h, i) {
-            if (i === 0) {
-                colWidthsArray.push(colWidths.no);
-            } else {
-                var colKey = columnas[i - 1];
-                colWidthsArray.push(colWidths[colKey] || 25);
-            }
-        });
-        
-        var totalTableWidth = colWidthsArray.reduce(function(a, b) { return a + b; }, 0);
-        var availableWidth = pageWidth - margin * 2;
-        var finalColWidths = colWidthsArray.slice();
-        if (totalTableWidth > availableWidth) {
-            var factor = availableWidth / totalTableWidth;
-            finalColWidths = colWidthsArray.map(function(w) { return Math.floor(w * factor); });
-        }
-        
-        function dibujarEncabezado(doc) {
+        function dibujarEncabezado() {
+            var logoImg = '';
             try {
-                var logoImg = document.querySelector('.nav-logo') && document.querySelector('.nav-logo').src || '';
-                if (logoImg) {
-                    var logoWidth = 18;
-                    var logoHeight = 18;
-                    var xLogo = (pageWidth - logoWidth) / 2;
-                    doc.addImage(logoImg, 'PNG', xLogo, 2, logoWidth, logoHeight);
+                var logoElement = document.querySelector('.nav-logo');
+                if (logoElement && logoElement.src) {
+                    logoImg = logoElement.src;
                 }
-            } catch(e) {}
+            } catch (e) {}
             
-            doc.setFontSize(10);
+            if (logoImg) {
+                try {
+                    doc.addImage(logoImg, 'PNG', margin, 4, 14, 14);
+                } catch (e) {}
+            }
+            
             doc.setFont('helvetica', 'bold');
-            doc.text('JUNTA MUNICIPAL SAN LUIS', pageWidth/2, 24, { align: 'center' });
             doc.setFontSize(7);
-            doc.text('RNC: 4-30-017809', pageWidth/2, 29, { align: 'center' });
-            doc.text('MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO', pageWidth/2, 33, { align: 'center' });
-            doc.text('DEPARTAMENTO DE ASUNTOS COMUNITARIOS', pageWidth/2, 37, { align: 'center' });
-            doc.setFontSize(9);
-            doc.text('REPORTE DE CENSO ELECTORAL', pageWidth/2, 43, { align: 'center' });
-            doc.setFontSize(6.5);
+            doc.text('JUNTA MUNICIPAL SAN LUIS', margin + 17, 7);
             doc.setFont('helvetica', 'normal');
-            doc.text('REPORTE: ' + titulo.toUpperCase(), pageWidth/2, 49, { align: 'center' });
-            doc.text('FECHA: ' + new Date().toLocaleDateString(), pageWidth/2, 53, { align: 'center' });
-            doc.text('TOTAL DE REGISTROS: ' + datos.length, pageWidth/2, 57, { align: 'center' });
+            doc.setFontSize(5.5);
+            doc.text('MUNICIPIO SANTO DOMINGO ESTE', margin + 17, 10.5);
+            doc.text('RNC: 4-30-017809', margin + 17, 14);
             
-            var fechaDesde = document.getElementById('reportFechaDesde') && document.getElementById('reportFechaDesde').value || '';
-            var fechaHasta = document.getElementById('reportFechaHasta') && document.getElementById('reportFechaHasta').value || '';
-            var filtros = '';
-            if (fechaDesde) filtros += 'Desde: ' + fechaDesde + ' ';
-            if (fechaHasta) filtros += 'Hasta: ' + fechaHasta;
-            if (filtros) {
-                doc.text('FILTRO: ' + filtros, pageWidth/2, 61, { align: 'center' });
-                return 66;
-            }
-            return 62;
-        }
-        
-        function dibujarTabla(doc, startY, datosSlice) {
-            var currentY = startY;
-            var rowHeight = 5;
-            var headerHeight = 6.5;
-            var tableWidth = finalColWidths.reduce(function(a, b) { return a + b; }, 0);
-            
-            doc.setFontSize(6);
             doc.setFont('helvetica', 'bold');
-            doc.setFillColor(26, 60, 94);
-            doc.rect(margin, currentY, tableWidth, headerHeight, 'F');
-            doc.setTextColor(255, 255, 255);
-            var xPos = margin;
-            headers.forEach(function(h, i) {
-                doc.text(h, xPos + 1.5, currentY + 4);
-                xPos += finalColWidths[i];
-            });
-            doc.setTextColor(0, 0, 0);
-            doc.setDrawColor(26, 60, 94);
-            xPos = margin;
-            headers.forEach(function(h, i) {
-                doc.rect(xPos, currentY, finalColWidths[i], headerHeight);
-                xPos += finalColWidths[i];
-            });
-            currentY += headerHeight;
-            
+            doc.setFontSize(10);
+            doc.text('REPORTE DE CENSO ELECTORAL', pageWidth / 2, 10, { align: 'center' });
             doc.setFont('helvetica', 'normal');
-            doc.setFontSize(6);
+            doc.setFontSize(6.5);
+            doc.text('CUADERNILLO - ' + titulo.toUpperCase(), pageWidth / 2, 15, { align: 'center' });
             
-            for (var idx = 0; idx < datosSlice.length; idx++) {
-                var d = datosSlice[idx];
-                var globalIdx = datos.indexOf(d);
-                var isEven = idx % 2 === 0;
-                
-                var row = [String(globalIdx + 1)];
-                columnas.forEach(function(col) {
-                    var valor = d[col] || '';
-                    if (col === 'fecha') {
-                        valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
-                    } else if (col !== 'cedula' && col !== 'telefono') {
-                        valor = valor.toUpperCase();
-                    }
-                    row.push(valor);
-                });
-                
-                var maxLines = 1;
-                var rowData = [];
-                row.forEach(function(text, i) {
-                    var maxWidth = finalColWidths[i] - 3;
-                    var lines = doc.splitTextToSize(text, maxWidth);
-                    rowData.push(lines);
-                    if (lines.length > maxLines) maxLines = lines.length;
-                });
-                
-                var rowHeightDynamic = Math.max(rowHeight, maxLines * 4 + 1.5);
-                
-                if (isEven) doc.setFillColor(248, 248, 248);
-                else doc.setFillColor(255, 255, 255);
-                doc.rect(margin, currentY, tableWidth, rowHeightDynamic, 'F');
-                
-                for (var line = 0; line < maxLines; line++) {
-                    rowData.forEach(function(lines, i) {
-                        var x = margin + finalColWidths.slice(0, i).reduce(function(a, b) { return a + b; }, 0);
-                        var y = currentY + 2 + (line * 4);
-                        var text = lines[line] || '';
-                        doc.text(text, x + 1.5, y);
-                    });
-                }
-                
-                doc.setDrawColor(200, 200, 200);
-                xPos = margin;
-                headers.forEach(function(h, i) {
-                    doc.rect(xPos, currentY, finalColWidths[i], rowHeightDynamic);
-                    xPos += finalColWidths[i];
-                });
-                
-                currentY += rowHeightDynamic;
+            if (conMarcaDeAgua) {
+                doc.setTextColor(184, 134, 11);
+                doc.setFontSize(5);
+                doc.text('🔷 DOCUMENTO CON MARCA DE AGUA', pageWidth / 2, 19, { align: 'center' });
+                doc.setTextColor(0, 0, 0);
             }
             
-            return currentY;
+            var totalText = 'TOTAL: ' + datos.length + ' REGISTROS';
+            doc.setFontSize(5.5);
+            doc.text(totalText, pageWidth / 2, 23, { align: 'center' });
+            
+            var pageBoxWidth = 24;
+            var pageBoxHeight = 13;
+            var pageBoxX = pageWidth - margin - pageBoxWidth;
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.3);
+            doc.rect(pageBoxX, 4, pageBoxWidth, pageBoxHeight);
+            doc.setFontSize(4.5);
+            doc.text('PÁGINA', pageBoxX + pageBoxWidth / 2, 8.5, { align: 'center' });
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            var numeroPagina = String(pageNumber).padStart(4, '0');
+            doc.text(numeroPagina, pageBoxX + pageBoxWidth / 2, 15, { align: 'center' });
+            
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.4);
+            doc.line(margin, 26, pageWidth - margin, 26);
+            
+            return 28;
         }
         
-        function dibujarPiePagina(doc, pageNum) {
-            var y = pageHeight - 5;
-            doc.setFontSize(6);
+        function esImagenValida(url) {
+            if (!url) return false;
+            if (typeof url !== 'string') return false;
+            var urlLower = url.toLowerCase();
+            if (urlLower.includes('logo') || urlLower.includes('anguilla') || urlLower.includes('lottery')) {
+                return false;
+            }
+            return true;
+        }
+        
+        function dibujarFoto(persona, x, y) {
+            doc.setDrawColor(120, 120, 120);
+            doc.setLineWidth(0.3);
+            doc.rect(x, y, photoWidth, photoHeight);
+            
+            if (!esImagenValida(persona.fotoUrl)) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(5);
+                doc.text('SIN FOTO', x + photoWidth / 2, y + photoHeight / 2, { align: 'center' });
+                return;
+            }
+            
+            try {
+                var formato = 'JPEG';
+                var fotoLower = persona.fotoUrl.toLowerCase();
+                if (fotoLower.includes('png') || persona.fotoUrl.startsWith('data:image/png')) {
+                    formato = 'PNG';
+                }
+                doc.addImage(persona.fotoUrl, formato, x + 0.5, y + 0.5, photoWidth - 1, photoHeight - 1);
+            } catch (error) {
+                doc.setFontSize(5);
+                doc.text('SIN FOTO', x + photoWidth / 2, y + photoHeight / 2, { align: 'center' });
+            }
+        }
+        
+        function dibujarElector(persona, x, y, numero) {
+            doc.setDrawColor(150, 150, 150);
+            doc.setLineWidth(0.25);
+            doc.rect(x, y, columnWidth, recordHeight);
+            
             doc.setFont('helvetica', 'normal');
-            doc.text('Página ' + pageNum, pageWidth/2, y, { align: 'center' });
+            doc.setFontSize(5);
+            doc.text(String(numero), x + columnWidth - 2, y + 4, { align: 'right' });
+            
+            var photoX = x + 2;
+            var photoY = y + 3;
+            
+            if (mostrarFoto) {
+                dibujarFoto(persona, photoX, photoY);
+            } else {
+                doc.setDrawColor(120, 120, 120);
+                doc.setLineWidth(0.3);
+                doc.rect(photoX, photoY, photoWidth, photoHeight);
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(5);
+                doc.text('SIN FOTO', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+            }
+            
+            var dataX = photoX + photoWidth + 3;
+            var dataWidth = columnWidth - photoWidth - 8;
+            
+            var tipoDoc = persona.tipoDocumento ? persona.tipoDocumento.toUpperCase() : 'CÉDULA';
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(6);
+            doc.text(tipoDoc + ': ' + (persona.cedula || 'N/A'), dataX, y + 7);
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7);
+            var nombre = (persona.nombre || 'SIN NOMBRE').toUpperCase();
+            var nombreLines = doc.splitTextToSize(nombre, dataWidth);
+            var nombreY = y + 12;
+            for (var i = 0; i < Math.min(nombreLines.length, 2); i++) {
+                doc.text(nombreLines[i], dataX, nombreY);
+                nombreY += 4.5;
+            }
+            
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(5);
+            doc.text('Nacionalidad: ' + (persona.nacionalidad || 'N/A').toUpperCase(), dataX, y + 18);
+            
+            if (persona.direccion) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(5);
+                var direccion = persona.direccion.toUpperCase();
+                var dirLines = doc.splitTextToSize(direccion, dataWidth);
+                var dirY = y + 22;
+                for (var d = 0; d < Math.min(dirLines.length, 2); d++) {
+                    doc.text(dirLines[d], dataX, dirY);
+                    dirY += 4;
+                }
+            }
+            
+            if (persona.telefono) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(5);
+                doc.text('Tel: ' + persona.telefono, dataX, y + recordHeight - 6);
+            }
+            
+            var firmaX = x + columnWidth - 20;
+            var firmaY = y + recordHeight - 6;
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.4);
+            doc.line(firmaX, firmaY, firmaX + 16, firmaY);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(4.5);
+            doc.text('FIRMA', firmaX + 8, firmaY + 4, { align: 'center' });
         }
         
-        var startY = dibujarEncabezado(doc);
+        function dibujarPiePagina() {
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.2);
+            doc.line(margin, pageHeight - 8, pageWidth - margin, pageHeight - 8);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(5);
+            var totalPaginas = Math.ceil(datos.length / (Math.floor((pageHeight - 28 - 10) / recordHeight) * 2));
+            doc.text('Página ' + pageNumber + ' de ' + totalPaginas, pageWidth / 2, pageHeight - 4, { align: 'center' });
+            
+            if (conMarcaDeAgua) {
+                doc.setTextColor(184, 134, 11);
+                doc.setFontSize(4.5);
+                doc.text('DOCUMENTO OFICIAL - JUNTA MUNICIPAL SAN LUIS', pageWidth / 2, pageHeight - 1, { align: 'center' });
+                doc.setTextColor(0, 0, 0);
+            }
+        }
+        
+        var headerStartY = 28;
+        var footerSpace = 10;
+        var usableHeight = pageHeight - headerStartY - footerSpace;
+        var recordsPerColumn = Math.floor(usableHeight / recordHeight);
+        if (recordsPerColumn < 1) recordsPerColumn = 1;
+        
         var currentIndex = 0;
-        var totalRows = datos.length;
-        var pageHeightAvailable = pageHeight - 10;
         
-        while (currentIndex < totalRows) {
-            var tempY = startY;
-            var tempSlice = [];
-            var headerAdded = false;
-            
-            for (var i = currentIndex; i < totalRows; i++) {
-                var d = datos[i];
-                var row = [String(i + 1)];
-                columnas.forEach(function(col) {
-                    var valor = d[col] || '';
-                    if (col === 'fecha') {
-                        valor = d.fechaRegistro || new Date(d.fecha).toLocaleString() || '';
-                    } else if (col !== 'cedula' && col !== 'telefono') {
-                        valor = valor.toUpperCase();
-                    }
-                    row.push(valor);
-                });
-                
-                var maxLines = 1;
-                row.forEach(function(text, j) {
-                    var maxWidth = finalColWidths[j] - 3;
-                    var lines = doc.splitTextToSize(text, maxWidth);
-                    if (lines.length > maxLines) maxLines = lines.length;
-                });
-                
-                var rowHeightDynamic = Math.max(5, maxLines * 4 + 1.5);
-                
-                if (!headerAdded) {
-                    if (tempY + 6.5 + rowHeightDynamic + 1 > pageHeightAvailable) break;
-                    tempY += 6.5;
-                    headerAdded = true;
-                } else {
-                    if (tempY + rowHeightDynamic + 1 > pageHeightAvailable) break;
-                }
-                
-                tempY += rowHeightDynamic + 0.5;
-                tempSlice.push(d);
-            }
-            
-            if (tempSlice.length === 0 && currentIndex < totalRows) {
-                tempSlice.push(datos[currentIndex]);
-                tempY = startY + 6.5;
-            }
-            
-            startY = dibujarTabla(doc, startY, tempSlice);
-            currentIndex += tempSlice.length;
-            
-            if (currentIndex < totalRows) {
-                dibujarPiePagina(doc, pageCount);
+        while (currentIndex < datos.length) {
+            if (pageNumber > 1) {
                 doc.addPage();
-                pageCount++;
-                startY = dibujarEncabezado(doc);
+                if (conMarcaDeAgua) {
+                    doc.setTextColor(200, 200, 200);
+                    doc.setFontSize(60);
+                    doc.setFont('helvetica', 'bold');
+                    doc.text('CONFIDENCIAL', pageWidth / 2, pageHeight / 2, { align: 'center', angle: 45 });
+                    doc.setTextColor(0, 0, 0);
+                }
             }
+            
+            var startY = dibujarEncabezado();
+            
+            for (var izquierda = 0; izquierda < recordsPerColumn; izquierda++) {
+                if (currentIndex >= datos.length) break;
+                var y = startY + (izquierda * recordHeight);
+                dibujarElector(datos[currentIndex], leftColumnX, y, currentIndex + 1);
+                currentIndex++;
+            }
+            
+            for (var derecha = 0; derecha < recordsPerColumn; derecha++) {
+                if (currentIndex >= datos.length) break;
+                var y = startY + (derecha * recordHeight);
+                dibujarElector(datos[currentIndex], rightColumnX, y, currentIndex + 1);
+                currentIndex++;
+            }
+            
+            dibujarPiePagina();
+            pageNumber++;
         }
         
-        dibujarPiePagina(doc, pageCount);
-        doc.save('Censo_JMSL_' + titulo.replace(/\s/g, '_') + '_' + new Date().toISOString().slice(0,10) + '.pdf');
-        showNotification('✅ Reporte PDF generado correctamente', 'success');
+        var fechaActual = new Date().toISOString().slice(0, 10);
+        var nombreArchivo = 'Cuadernillo_Censo_JMSL_' + titulo.replace(/\s/g, '_') + '_' + fechaActual;
+        if (conMarcaDeAgua) {
+            nombreArchivo += '_CON_MARCA_AGUA';
+        }
+        nombreArchivo += '.pdf';
+        
+        doc.save(nombreArchivo);
+        showNotification('✅ Cuadernillo PDF generado correctamente' + (conMarcaDeAgua ? ' (CON MARCA DE AGUA)' : ''), 'success');
+        
     } catch (error) {
         console.error('Error al generar PDF:', error);
         showNotification('❌ Error al generar PDF: ' + error.message, 'error');
@@ -2127,250 +3004,252 @@ function exportarPDF(datos, titulo, columnas) {
 }
 
 // ============================================================
-// TABLA DE FIRMAS - CON FILTROS DE FECHA Y ORDEN
+// REPORTE DE VOTANTES - CON SELLO "VOTÓ"
 // ============================================================
-function imprimirTablaFirmas() {
-    var datos = Object.values(censoCache);
-    var titulo = 'Todos los Sectores';
-    var bloqueSeleccionado = '';
-    var sectorSeleccionado = '';
+function generarReporteVotantes() {
+    var items = Object.values(votantesCache);
     
-    // Si es encuestador, filtrar por su sector
-    if (currentUser && currentUser.role !== 'admin' && currentUser.sector) {
-        datos = datos.filter(function(d) { return d.sector === currentUser.sector; });
-        titulo = 'Sector: ' + currentUser.sector;
-        sectorSeleccionado = currentUser.sector;
-    } else {
-        // Solo admin puede usar filtros
-        var reportType = document.getElementById('reportType').value;
-        if (reportType === 'bloque') {
-            var bloque = document.getElementById('reportBloque').value;
-            if (!bloque) { showNotification('⚠️ Seleccione un bloque', 'warning'); return; }
-            datos = datos.filter(function(d) { return d.bloque === bloque; });
-            titulo = 'Bloque ' + bloque;
-            bloqueSeleccionado = bloque;
-        } else if (reportType === 'sector') {
-            var sector = document.getElementById('reportSector').value;
-            if (!sector) { showNotification('⚠️ Seleccione un sector', 'warning'); return; }
-            var bloque2 = document.getElementById('reportBloque').value;
-            datos = datos.filter(function(d) { return d.sector === sector; });
-            titulo = 'Sector: ' + sector;
-            sectorSeleccionado = sector;
-            bloqueSeleccionado = bloque2;
-        }
-        
-        // Filtro por fecha
-        var fechaDesde = document.getElementById('reportFechaDesde').value;
-        var fechaHasta = document.getElementById('reportFechaHasta').value;
-        
-        if (fechaDesde) {
-            var desde = new Date(fechaDesde).getTime();
-            datos = datos.filter(function(d) { return new Date(d.fecha).getTime() >= desde; });
-        }
-        if (fechaHasta) {
-            var hasta = new Date(fechaHasta).getTime() + 86400000;
-            datos = datos.filter(function(d) { return new Date(d.fecha).getTime() <= hasta; });
-        }
-        
-        // Ordenamiento
-        var orderBy = document.getElementById('reportOrderBy').value;
-        var orderDir = document.getElementById('reportOrderDir').value;
-        
-        datos.sort(function(a, b) {
-            var valA = a[orderBy] || '';
-            var valB = b[orderBy] || '';
-            if (orderBy === 'fecha') {
-                valA = new Date(valA).getTime() || 0;
-                valB = new Date(valB).getTime() || 0;
-            }
-            if (valA < valB) return orderDir === 'asc' ? -1 : 1;
-            if (valA > valB) return orderDir === 'asc' ? 1 : -1;
-            return 0;
-        });
-    }
-    
-    if (datos.length === 0) {
-        showNotification('⚠️ No hay datos para generar la tabla de firmas', 'warning');
+    if (items.length === 0) {
+        showNotification('⚠️ No hay votantes registrados', 'warning');
         return;
     }
     
-    var presidente = null;
-    if (bloqueSeleccionado && sectorSeleccionado) {
-        presidente = getPresidentePorSector(bloqueSeleccionado, sectorSeleccionado);
-    }
-    if (!presidente && bloqueSeleccionado) {
-        var presidentes = Object.values(presidentesCache);
-        for (var i = 0; i < presidentes.length; i++) {
-            if (presidentes[i].bloque === bloqueSeleccionado) { presidente = presidentes[i]; break; }
-        }
-    }
-    if (!presidente && sectorSeleccionado) {
-        var presidentes2 = Object.values(presidentesCache);
-        for (var j = 0; j < presidentes2.length; j++) {
-            if (presidentes2[j].sector === sectorSeleccionado) { presidente = presidentes2[j]; break; }
-        }
-    }
-    
-    // Ordenar por calle y nombre para mejor visualización
-    datos.sort(function(a, b) {
-        var calleA = a.calle || '';
-        var calleB = b.calle || '';
-        if (calleA !== calleB) return calleA.localeCompare(calleB);
+    items.sort(function(a, b) {
+        var sectorA = (a.sector || '').toUpperCase();
+        var sectorB = (b.sector || '').toUpperCase();
+        if (sectorA < sectorB) return -1;
+        if (sectorA > sectorB) return 1;
+        var bloqueA = String(a.bloque || '');
+        var bloqueB = String(b.bloque || '');
+        if (bloqueA < bloqueB) return -1;
+        if (bloqueA > bloqueB) return 1;
         return (a.nombre || '').localeCompare(b.nombre || '');
     });
     
-    var ventana = window.open('', '_blank', 'width=900,height=600');
-    if (!ventana) {
-        showNotification('⚠️ Permita ventanas emergentes para imprimir', 'warning');
-        return;
-    }
-    
-    var logoBase64 = '';
     try {
-        var logoImg = document.querySelector('.nav-logo') && document.querySelector('.nav-logo').src || '';
-        if (logoImg) logoBase64 = logoImg;
-    } catch(e) {}
-    
-    var fechaDesde2 = document.getElementById('reportFechaDesde') && document.getElementById('reportFechaDesde').value || '';
-    var fechaHasta2 = document.getElementById('reportFechaHasta') && document.getElementById('reportFechaHasta').value || '';
-    var orderBy2 = document.getElementById('reportOrderBy') && document.getElementById('reportOrderBy').value || 'nombre';
-    var orderDir2 = document.getElementById('reportOrderDir') && document.getElementById('reportOrderDir').value || 'asc';
-    
-    var fechaDesdeStr = fechaDesde2 ? 'Desde: ' + fechaDesde2 : '';
-    var fechaHastaStr = fechaHasta2 ? 'Hasta: ' + fechaHasta2 : '';
-    var filtrosStr = [fechaDesdeStr, fechaHastaStr].filter(function(f) { return f; }).join(' | ');
-    var ordenStr = 'Orden: ' + orderBy2 + ' (' + (orderDir2 === 'asc' ? 'Ascendente' : 'Descendente') + ')';
-    
-    var html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>Tabla de Firmas - Junta Municipal San Luis</title>
-        <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: 'Arial', sans-serif; padding: 30px; background: white; }
-            .header { text-align: center; border-bottom: 3px solid #B8860B; padding-bottom: 15px; margin-bottom: 20px; }
-            .header .logo { display: block; margin: 0 auto 10px; max-width: 80px; max-height: 80px; }
-            .header h1 { color: #1a3c5e; font-size: 22px; letter-spacing: 2px; }
-            .header .rnc { font-size: 12px; color: #6b7a8f; }
-            .header .ubicacion { font-size: 12px; color: #6b7a8f; }
-            .header h2 { color: #B8860B; font-size: 16px; font-weight: normal; }
-            .header p { color: #6b7a8f; font-size: 13px; margin-top: 5px; }
-            .header .fecha { font-weight: bold; color: #1a3c5e; }
-            .header .filtros { font-size: 11px; color: #6b7a8f; margin-top: 3px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-            th { background: #1a3c5e; color: white; padding: 10px 12px; text-align: left; font-size: 13px; border: 1px solid #1a3c5e; }
-            td { padding: 10px 12px; border: 1px solid #ccc; font-size: 12px; vertical-align: middle; }
-            .firma-cell { width: 200px; text-align: center; font-size: 11px; color: #999; }
-            .firma-line { border-bottom: 1px solid #333; height: 30px; margin-bottom: 5px; }
-            .numero-cell { text-align: center; font-weight: bold; width: 40px; }
-            .firma-container { display: flex; justify-content: space-around; margin-top: 30px; padding-top: 20px; border-top: 2px solid #B8860B; }
-            .firma-box { text-align: center; width: 30%; }
-            .firma-box .linea { border-bottom: 1px solid #000; height: 30px; margin: 0 auto 5px; width: 90%; }
-            .firma-box .nombre { font-weight: bold; font-size: 13px; color: #1a3c5e; }
-            .firma-box .cargo { font-size: 11px; color: #6b7a8f; }
-            .firma-centro { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 2px solid #B8860B; }
-            .firma-centro .linea { border-bottom: 1px solid #000; height: 30px; margin: 0 auto 5px; width: 60%; }
-            .firma-centro .nombre { font-weight: bold; font-size: 13px; color: #1a3c5e; }
-            .firma-centro .cedula { font-size: 10px; color: #999; margin-top: 2px; }
-            .firma-centro .cargo { font-size: 11px; color: #6b7a8f; }
-            .btn-imprimir { position: fixed; top: 20px; right: 20px; padding: 12px 24px; background: #B8860B; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: bold; z-index: 1000; }
-            .btn-imprimir:hover { background: #8B6900; }
-            .info-adicional { font-size: 11px; color: #6b7a8f; margin-top: 5px; text-align: center; }
-            @media print { .btn-imprimir { display: none; } body { padding: 15px; } }
-        </style>
-    </head>
-    <body>
-        <button class="btn-imprimir" onclick="window.print()">
-            <i class="fas fa-print"></i> Imprimir
-        </button>
+        if (typeof window.jspdf === 'undefined') {
+            showNotification('❌ La librería jsPDF no está cargada correctamente', 'error');
+            return;
+        }
+        var jsPDF = window.jspdf.jsPDF;
+        if (!jsPDF) {
+            showNotification('❌ Error al cargar la librería PDF', 'error');
+            return;
+        }
         
-        <div class="header">
-            <img src="${logoBase64 || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 200%22%3E%3Crect width=%22200%22 height=%22200%22 fill=%22%23ffffff%22/%3E%3Ccircle cx=%22100%22 cy=%22100%22 r=%2285%22 fill=%22%23B8860B%22/%3E%3Ccircle cx=%22100%22 cy=%22100%22 r=%2275%22 fill=%22%23D4AF37%22/%3E%3Ctext x=%22100%22 y=%22115%22 font-size=%2245%22 text-anchor=%22middle%22 fill=%22%23ffffff%22 font-weight=%22bold%22 font-family=%22serif%22%3EJMSL%3C/text%3E%3C/svg%3E'}" alt="Logo" class="logo">
-            <h1>JUNTA MUNICIPAL SAN LUIS</h1>
-            <div class="rnc">RNC: 4-30-017809</div>
-            <div class="ubicacion">MUNICIPIO: SANTO DOMINGO ESTE - PROVINCIA: SANTO DOMINGO</div>
-            <h2>DEPARTAMENTO DE ASUNTOS COMUNITARIOS</h2>
-            <p>REPORTE DE CENSO ELECTORAL - TABLA DE FIRMAS</p>
-            <p class="fecha">Reporte: ${titulo} | Fecha: ${new Date().toLocaleDateString()} | Total: ${datos.length} personas</p>
-            ${filtrosStr ? '<p class="filtros">' + filtrosStr + '</p>' : ''}
-            <p class="info-adicional">${ordenStr}</p>
-        </div>
+        var doc = new jsPDF('p', 'mm', 'letter');
+        var pageWidth = doc.internal.pageSize.getWidth();
+        var pageHeight = doc.internal.pageSize.getHeight();
+        var margin = 6;
+        var pageNumber = 1;
         
-        <table>
-            <thead>
-                <tr>
-                    <th style="text-align:center;width:40px;">No.</th>
-                    <th style="width:150px;">CÉDULA</th>
-                    <th>NOMBRE COMPLETO</th>
-                    <th style="width:200px;text-align:center;">FIRMA</th>
-                </tr>
-            </thead>
-            <tbody>
-    `;
-    
-    datos.forEach(function(d, index) {
-        html += `
-            <tr>
-                <td class="numero-cell">${index + 1}</td>
-                <td>${d.cedula || ''}</td>
-                <td>${(d.nombre || '').toUpperCase()}</td>
-                <td class="firma-cell">
-                    <div class="firma-line"></div>
-                </td>
-            </tr>
-        `;
-    });
-    
-    html += `
-            </tbody>
-        </table>
+        var columnGap = 2;
+        var columnWidth = ((pageWidth - (margin * 2) - columnGap) / 2);
+        var leftColumnX = margin;
+        var rightColumnX = margin + columnWidth + columnGap;
+        var recordHeight = 30;
+        var photoWidth = 18;
+        var photoHeight = 22;
         
-        <div class="firma-container">
-            <div class="firma-box">
-                <div class="linea"></div>
-                <div class="nombre">FRANCISCO LORENZO</div>
-                <div class="cargo">DIRECTOR</div>
-            </div>
-            <div class="firma-box">
-                <div class="linea"></div>
-                <div class="nombre">DOMINGO CARSADO</div>
-                <div class="cargo">ENCARGADO</div>
-            </div>
-        </div>
-    `;
-    
-    if (presidente) {
-        html += `
-        <div class="firma-centro">
-            <div class="linea"></div>
-            <div class="nombre">${presidente.nombre}</div>
-            <div class="cedula">Cédula: ${presidente.cedula || 'N/A'}</div>
-            <div class="cargo">PRESIDENTE DE COMITÉ</div>
-        </div>
-        `;
-    } else {
-        html += `
-        <div class="firma-centro">
-            <div class="linea"></div>
-            <div class="nombre" style="color:#999;font-size:11px;">(Sin presidente registrado)</div>
-            <div class="cargo">PRESIDENTE DE COMITÉ</div>
-        </div>
-        `;
+        function dibujarEncabezado() {
+            var logoImg = '';
+            try {
+                var logoElement = document.querySelector('.nav-logo');
+                if (logoElement && logoElement.src) {
+                    logoImg = logoElement.src;
+                }
+            } catch (e) {}
+            
+            if (logoImg) {
+                try {
+                    doc.addImage(logoImg, 'PNG', margin, 4, 14, 14);
+                } catch (e) {}
+            }
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7);
+            doc.text('JUNTA MUNICIPAL SAN LUIS', margin + 17, 7);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(5.5);
+            doc.text('MUNICIPIO SANTO DOMINGO ESTE', margin + 17, 10.5);
+            doc.text('RNC: 4-30-017809', margin + 17, 14);
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            doc.text('LISTA DE VOTANTES', pageWidth / 2, 10, { align: 'center' });
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(6.5);
+            doc.text('REGISTRO DE ELECTORES QUE VOTARON', pageWidth / 2, 15, { align: 'center' });
+            
+            var totalText = 'TOTAL: ' + items.length + ' VOTANTES';
+            doc.setFontSize(5.5);
+            doc.text(totalText, pageWidth / 2, 20, { align: 'center' });
+            
+            var pageBoxWidth = 24;
+            var pageBoxHeight = 13;
+            var pageBoxX = pageWidth - margin - pageBoxWidth;
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.3);
+            doc.rect(pageBoxX, 4, pageBoxWidth, pageBoxHeight);
+            doc.setFontSize(4.5);
+            doc.text('PÁGINA', pageBoxX + pageBoxWidth / 2, 8.5, { align: 'center' });
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(10);
+            var numeroPagina = String(pageNumber).padStart(4, '0');
+            doc.text(numeroPagina, pageBoxX + pageBoxWidth / 2, 15, { align: 'center' });
+            
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.4);
+            doc.line(margin, 23, pageWidth - margin, 23);
+            
+            return 25;
+        }
+        
+        function esImagenValida(url) {
+            if (!url) return false;
+            if (typeof url !== 'string') return false;
+            var urlLower = url.toLowerCase();
+            if (urlLower.includes('logo') || urlLower.includes('anguilla') || urlLower.includes('lottery')) {
+                return false;
+            }
+            return true;
+        }
+        
+        function dibujarFoto(persona, x, y) {
+            doc.setDrawColor(120, 120, 120);
+            doc.setLineWidth(0.3);
+            doc.rect(x, y, photoWidth, photoHeight);
+            
+            if (!esImagenValida(persona.fotoUrl)) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(5);
+                doc.text('SIN FOTO', x + photoWidth / 2, y + photoHeight / 2, { align: 'center' });
+                return;
+            }
+            
+            try {
+                var formato = 'JPEG';
+                var fotoLower = persona.fotoUrl.toLowerCase();
+                if (fotoLower.includes('png') || persona.fotoUrl.startsWith('data:image/png')) {
+                    formato = 'PNG';
+                }
+                doc.addImage(persona.fotoUrl, formato, x + 0.5, y + 0.5, photoWidth - 1, photoHeight - 1);
+            } catch (error) {
+                doc.setFontSize(5);
+                doc.text('SIN FOTO', x + photoWidth / 2, y + photoHeight / 2, { align: 'center' });
+            }
+        }
+        
+        function dibujarVotante(persona, x, y, numero) {
+            doc.setDrawColor(150, 150, 150);
+            doc.setLineWidth(0.25);
+            doc.rect(x, y, columnWidth, recordHeight);
+            
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(5);
+            doc.text(String(numero), x + columnWidth - 2, y + 4, { align: 'right' });
+            
+            var photoX = x + 2;
+            var photoY = y + 3;
+            dibujarFoto(persona, photoX, photoY);
+            
+            var dataX = photoX + photoWidth + 3;
+            var dataWidth = columnWidth - photoWidth - 8;
+            
+            var tipoDoc = persona.tipoDocumento ? persona.tipoDocumento.toUpperCase() : 'CÉDULA';
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(6);
+            doc.text(tipoDoc + ': ' + (persona.cedula || 'N/A'), dataX, y + 7);
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7);
+            var nombre = (persona.nombre || 'SIN NOMBRE').toUpperCase();
+            var nombreLines = doc.splitTextToSize(nombre, dataWidth);
+            var nombreY = y + 12;
+            for (var i = 0; i < Math.min(nombreLines.length, 2); i++) {
+                doc.text(nombreLines[i], dataX, nombreY);
+                nombreY += 4.5;
+            }
+            
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(5);
+            doc.text('Nacionalidad: ' + (persona.nacionalidad || 'N/A').toUpperCase(), dataX, y + 19);
+            
+            var sector = (persona.sector || '').toUpperCase();
+            if (sector) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(5);
+                doc.text('SECTOR: ' + sector, dataX, y + 23);
+            }
+            
+            // SELLO VOTÓ - TAMAÑO REDUCIDO
+            var selloX = x + columnWidth - 22;
+            var selloY = y + recordHeight - 14;
+            var selloRadio = 8;
+            
+            doc.setDrawColor(0, 120, 0);
+            doc.setFillColor(0, 180, 0);
+            doc.circle(selloX, selloY, selloRadio, 'F');
+            doc.setDrawColor(0, 80, 0);
+            doc.setLineWidth(0.5);
+            doc.circle(selloX, selloY, selloRadio, 'S');
+            
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(5);
+            doc.setTextColor(255, 255, 255);
+            doc.text('VOTÓ', selloX, selloY + 2, { align: 'center' });
+            doc.setTextColor(0, 0, 0);
+        }
+        
+        function dibujarPiePagina() {
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.2);
+            doc.line(margin, pageHeight - 8, pageWidth - margin, pageHeight - 8);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(5);
+            var totalPaginas = Math.ceil(items.length / (Math.floor((pageHeight - 25 - 10) / recordHeight) * 2));
+            doc.text('Página ' + pageNumber + ' de ' + totalPaginas, pageWidth / 2, pageHeight - 4, { align: 'center' });
+        }
+        
+        var headerStartY = 25;
+        var footerSpace = 10;
+        var usableHeight = pageHeight - headerStartY - footerSpace;
+        var recordsPerColumn = Math.floor(usableHeight / recordHeight);
+        if (recordsPerColumn < 1) recordsPerColumn = 1;
+        
+        var currentIndex = 0;
+        
+        while (currentIndex < items.length) {
+            if (pageNumber > 1) {
+                doc.addPage();
+            }
+            
+            var startY = dibujarEncabezado();
+            
+            for (var izquierda = 0; izquierda < recordsPerColumn; izquierda++) {
+                if (currentIndex >= items.length) break;
+                var y = startY + (izquierda * recordHeight);
+                dibujarVotante(items[currentIndex], leftColumnX, y, currentIndex + 1);
+                currentIndex++;
+            }
+            
+            for (var derecha = 0; derecha < recordsPerColumn; derecha++) {
+                if (currentIndex >= items.length) break;
+                var y = startY + (derecha * recordHeight);
+                dibujarVotante(items[currentIndex], rightColumnX, y, currentIndex + 1);
+                currentIndex++;
+            }
+            
+            dibujarPiePagina();
+            pageNumber++;
+        }
+        
+        var fechaActual = new Date().toISOString().slice(0, 10);
+        doc.save('Lista_Votantes_JMSL_' + fechaActual + '.pdf');
+        showNotification('✅ Lista de votantes generada correctamente', 'success');
+        
+    } catch (error) {
+        console.error('Error al generar reporte de votantes:', error);
+        showNotification('❌ Error al generar PDF: ' + error.message, 'error');
     }
-    
-    html += `
-        <div style="text-align:center;margin-top:15px;font-size:10px;color:#ccc;">
-            Documento generado por el Sistema de Censo Electoral - Junta Municipal San Luis
-        </div>
-        <script>
-            setTimeout(function() { window.print(); }, 800);
-        <\/script>
-    </body>
-    </html>
-    `;
-    
-    ventana.document.write(html);
-    ventana.document.close();
 }
