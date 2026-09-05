@@ -162,12 +162,6 @@ body {
     background: linear-gradient(135deg, var(--primary-dark), #6a4f00);
 }
 
-.btn-primary:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-    transform: none;
-}
-
 .error-message {
     color: var(--danger);
     text-align: center;
@@ -309,42 +303,6 @@ body {
     color: var(--gray-dark);
     margin-top: 5px;
     font-size: 0.95rem;
-}
-
-/* ===== FILTROS DASHBOARD ===== */
-.filtros-container {
-    margin-bottom: 25px;
-}
-
-.filtros-card {
-    background: var(--white);
-    padding: 20px 25px;
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    border-left: 4px solid var(--primary);
-}
-
-.filtros-card h3 {
-    margin-bottom: 15px;
-    color: var(--secondary);
-    font-size: 1.1rem;
-    font-weight: 600;
-}
-
-.filtros-card h3 i {
-    margin-right: 10px;
-    color: var(--primary);
-}
-
-.filtros-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr auto;
-    gap: 15px;
-    align-items: flex-end;
-}
-
-.filtros-row .form-group {
-    margin-bottom: 0;
 }
 
 /* ===== STATS ===== */
@@ -677,7 +635,7 @@ body {
 
 /* ===== LISTS ===== */
 .list-container {
-    max-height: 400px;
+    max-height: 600px;
     overflow-y: auto;
 }
 
@@ -811,20 +769,6 @@ body {
     font-size: 0.6rem;
 }
 
-.report-preview .preview-table tbody td.numero {
-    text-align: center;
-    font-weight: 600;
-    color: #1a3c5e;
-    background: #f5f7fa;
-}
-
-.report-preview .preview-empty {
-    text-align: center;
-    color: #6b7a8f;
-    padding: 30px 20px;
-    font-size: 0.95rem;
-}
-
 /* ===== REPORTS ===== */
 .report-options {
     display: grid;
@@ -860,6 +804,53 @@ body {
     font-weight: 500;
 }
 
+/* ===== VOTACION ===== */
+.votacion-card {
+    display: flex;
+    align-items: center;
+    gap: 30px;
+    padding: 20px;
+    background: var(--gray-light);
+    border-radius: 12px;
+    border: 2px solid var(--primary-light);
+}
+
+.votacion-foto {
+    width: 120px;
+    height: 120px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 3px solid var(--primary);
+    flex-shrink: 0;
+    background: #eee;
+}
+
+.votacion-foto img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.votacion-datos {
+    flex: 1;
+}
+
+.votacion-datos h3 {
+    color: var(--secondary);
+    font-size: 1.2rem;
+    margin-bottom: 8px;
+}
+
+.votacion-datos p {
+    margin: 4px 0;
+    font-size: 0.95rem;
+    color: var(--text-dark);
+}
+
+.votacion-datos p strong {
+    color: var(--secondary);
+}
+
 /* ===== RESPONSIVE ===== */
 @media (max-width: 992px) {
     .form-row {
@@ -867,9 +858,6 @@ body {
     }
     .report-options {
         grid-template-columns: 1fr;
-    }
-    .filtros-row {
-        grid-template-columns: 1fr 1fr;
     }
 }
 
@@ -901,22 +889,18 @@ body {
     .section-header h2 {
         font-size: 1.3rem;
     }
-    .filtros-row {
-        grid-template-columns: 1fr;
-    }
     .report-preview .preview-info {
         flex-direction: column;
         align-items: flex-start;
         gap: 4px;
     }
-    .report-preview .preview-table {
-        font-size: 0.6rem;
-        min-width: 400px;
+    .votacion-card {
+        flex-direction: column;
+        text-align: center;
     }
-    .report-preview .preview-table thead th,
-    .report-preview .preview-table tbody td {
-        padding: 3px 4px;
-        font-size: 0.55rem;
+    .votacion-foto {
+        width: 100px;
+        height: 100px;
     }
 }
 
@@ -955,23 +939,18 @@ body {
         width: 100%;
         justify-content: flex-end;
     }
-    .checkbox-group label {
-        font-size: 0.8rem;
-        padding: 4px 10px;
-    }
-    .report-preview .preview-table-wrapper {
-        max-height: 250px;
-    }
-    .report-preview .preview-table {
-        font-size: 0.5rem;
-        min-width: 350px;
-    }
-    .report-preview .preview-table thead th,
-    .report-preview .preview-table tbody td {
-        padding: 2px 3px;
-        font-size: 0.5rem;
-    }
-    .filtros-row {
-        grid-template-columns: 1fr;
-    }
+}
+
+/* Animaciones */
+@keyframes slideInRight {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideOutRight {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(100%); opacity: 0; }
+}
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
