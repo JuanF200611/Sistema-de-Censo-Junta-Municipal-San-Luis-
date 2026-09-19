@@ -2,13 +2,14 @@
 // CONFIGURACIÓN FIREBASE
 // ============================================================
 const firebaseConfig = {
-    apiKey: "AIzaSyDEFAULT_KEY_REPLACE_ME",
+    apiKey: "AIzaSyCbHE8G6_ORPGvVs9C8sCANgcIfNXVmaRQ",
     authDomain: "departamentoasuntoscomunitario.firebaseapp.com",
     databaseURL: "https://departamentoasuntoscomunitario-default-rtdb.firebaseio.com",
     projectId: "departamentoasuntoscomunitario",
-    storageBucket: "departamentoasuntoscomunitario.appspot.com",
-    messagingSenderId: "123456789012",
-    appId: "1:123456789012:web:abcdef123456"
+    storageBucket: "departamentoasuntoscomunitario.firebasestorage.app",
+    messagingSenderId: "381465471430",
+    appId: "1:381465471430:web:2a3a7e60b969a5ce1eeac7",
+    measurementId: "G-JYHD71MZSK"
 };
 
 let firebaseInicializado = false;
